@@ -6,8 +6,8 @@
   <meta name="theme-color" content="#0b1220">
   <meta name="description" content="Vietflex Map — nền tảng giám sát biến động rừng bằng ảnh vệ tinh.">
   <title>Giám sát rừng | Vietflex Map</title>
-  <link rel="preconnect" href="https://unpkg.com">
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+  <link rel="preconnect" href="https://cdn.jsdelivr.net">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/Vietflexmap/VN@6144d565fcf236727577ab3c4471bbe49f86892f/dist/vietflex.css">
   <link rel="stylesheet" href="assets/styles.css">
 </head>
 <body>
@@ -68,21 +68,25 @@
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
               </div>
 
-              <label class="field-label" for="district">Quận / huyện / thị xã</label>
+              <label class="field-label" for="unit-type">Loại đơn vị cấp xã</label>
               <div class="select-wrap">
-                <select id="district" name="district_code">
-                  <option value="" selected>-- Quận/Huyện/Thị Xã --</option>
+                <select id="unit-type" name="unit_type">
+                  <option value="" selected>Tất cả phường / xã / đặc khu</option>
+                  <option value="phường">Phường</option>
+                  <option value="xã">Xã</option>
+                  <option value="đặc khu">Đặc khu</option>
                 </select>
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
               </div>
 
-              <label class="field-label" for="commune">Xã / phường / thị trấn</label>
+              <label class="field-label" for="commune">Phường / xã / đặc khu</label>
               <div class="select-wrap">
                 <select id="commune" name="commune_code">
-                  <option value="" selected>-- Xã/Phường/Thị Trấn --</option>
+                  <option value="" selected>Tất cả đơn vị trong tỉnh/thành</option>
                 </select>
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
               </div>
+              <p class="boundary-hint" id="boundary-status">Ranh giới sẽ được lấy từ snapshot Vietflexmap/anhmap.</p>
             </fieldset>
 
             <fieldset>
@@ -184,7 +188,7 @@
                 <svg class="button-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13m-5-5 5 5-5 5"/></svg>
               </button>
             </div>
-            <p class="form-note"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 10v6M12 7.5h.01"/></svg> Bản đồ kết quả được tạo theo bộ lọc hiện tại.</p>
+            <p class="form-note"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 10v6M12 7.5h.01"/></svg> AOI gửi lên backend là mã ranh giới hành chính đã chọn; ảnh và vector kết quả phải được clip theo AOI đó.</p>
           </form>
         </div>
         <div class="panel-footer"><span class="brand-mini">V</span> Long Ngo thiết kế · Vietflex Map</div>
@@ -200,8 +204,11 @@
             <kbd>⌘ K</kbd>
           </div>
           <div class="map-top-actions">
-            <button class="map-action active" data-basemap="light" type="button"><span class="map-action-swatch light"></span>Sáng</button>
+            <button class="map-action active" data-basemap="roadmap" type="button"><span class="map-action-swatch roadmap"></span>Google Maps</button>
             <button class="map-action" data-basemap="satellite" type="button"><span class="map-action-swatch satellite"></span>Ảnh vệ tinh</button>
+            <button class="map-action" data-basemap="hybrid" type="button"><span class="map-action-swatch hybrid"></span>Hybrid</button>
+            <button class="map-action" data-basemap="terrain" type="button"><span class="map-action-swatch terrain"></span>Địa hình</button>
+            <a class="map-action map-earth-link" id="open-earth" href="https://earth.google.com/web/" target="_blank" rel="noopener noreferrer"><span class="map-action-swatch earth"></span>Google Earth</a>
             <button class="icon-button map-action-icon" id="fullscreen-button" type="button" aria-label="Toàn màn hình" title="Toàn màn hình"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M21 16v5h-5M3 16v5h5"/></svg></button>
           </div>
         </div>
@@ -222,7 +229,8 @@
         <div class="map-context-card">
           <div class="context-kicker">KHU VỰC PHÂN TÍCH</div>
           <strong id="map-context-title">Thành phố Hà Nội</strong>
-          <span id="map-context-subtitle">Toàn thành phố · 3.359 km²</span>
+          <span id="map-context-subtitle">Đang nạp bộ đơn vị hành chính…</span>
+          <div class="context-links"><a id="open-google-maps" href="https://www.google.com/maps" target="_blank" rel="noopener noreferrer">Google Maps</a><a id="open-google-earth" href="https://earth.google.com/web/" target="_blank" rel="noopener noreferrer">Google Earth</a></div>
           <div class="context-divider"></div>
           <div class="context-period"><span class="period-dot baseline"></span><span id="context-baseline">11/03/2026 — 11/06/2026</span></div>
           <div class="context-period"><span class="period-dot comparison"></span><span id="context-comparison">12/06/2026 — 12/09/2026</span></div>
@@ -235,7 +243,7 @@
           <div class="legend-item"><span class="legend-swatch boundary"></span><span>Ranh giới phân tích</span></div>
         </div>
 
-        <div class="map-attribution">Sentinel‑2 · Copernicus <span>•</span> Vietflex Map</div>
+        <div class="map-attribution" id="map-attribution">Vietflex Map <span>•</span> Google Maps <span>•</span> Ranh giới Vietflexmap/anhmap</div>
 
         <section class="results-drawer" id="results-drawer" aria-live="polite" hidden>
           <div class="results-head">
@@ -244,6 +252,7 @@
               <h2 id="results-title">Chưa có kết quả</h2>
             </div>
             <div class="results-head-actions">
+              <button class="text-button" id="download-image" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM7 15l3-3 2 2 2-2 3 3M8 9h.01"/></svg> Ảnh đã clip</button>
               <button class="text-button" id="download-csv" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 19h14"/></svg> CSV</button>
               <button class="icon-button" id="close-results" type="button" aria-label="Đóng kết quả"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
             </div>
@@ -256,7 +265,7 @@
           </div>
           <div class="results-list-head"><span>Danh sách vùng biến động</span><span id="results-count-label">0 vùng</span></div>
           <div class="results-list" id="results-list"></div>
-          <div class="results-disclaimer"><span class="status-dot amber"></span> Dữ liệu minh họa phía trình duyệt. Kết nối API xử lý ảnh để dùng dữ liệu Sentinel‑2 thực.</div>
+          <div class="results-disclaimer" id="results-disclaimer"><span class="status-dot amber"></span> Chế độ minh họa phía trình duyệt. Kết nối API để nhận ảnh và vector Sentinel‑2/Landsat đã clip theo AOI.</div>
         </section>
 
         <div class="map-loading" id="map-loading" hidden>
@@ -278,7 +287,7 @@
     <div class="help-content"><p>Chọn địa bàn, vệ tinh, loại biến động và hai khoảng thời gian. Công cụ sẽ trả về các vùng có thay đổi vượt ngưỡng diện tích.</p><div class="help-rule"><span>01</span><div><strong>Đầu kỳ và cuối kỳ</strong><small>Khoảng đầu kỳ phải kết thúc trước ngày bắt đầu cuối kỳ.</small></div></div><div class="help-rule"><span>02</span><div><strong>Ngưỡng diện tích</strong><small>Đặt diện tích nhỏ nhất để giảm nhiễu các vùng rất nhỏ.</small></div></div><div class="help-rule"><span>03</span><div><strong>Độ tin cậy</strong><small>Luôn kiểm tra ảnh gốc, mây và thực địa trước khi ra quyết định.</small></div></div></div>
   </dialog>
 
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="https://cdn.jsdelivr.net/gh/Vietflexmap/VN@6144d565fcf236727577ab3c4471bbe49f86892f/dist/vietflex.js"></script>
   <script src="assets/app.js"></script>
 </body>
 </html>
