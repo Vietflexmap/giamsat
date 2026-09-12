@@ -9,26 +9,32 @@ WebGIS static-first cho GitHub Pages, dùng [Vietflexmap/VN](https://github.com/
 - Click polygon PMTiles hoặc dùng bộ chọn để xác định AOI; giao diện chỉ gửi mã ĐVHC, không tin geometry do trình duyệt tự vẽ.
 - Vietflex làm map core; có Google Maps roadmap, satellite, hybrid, terrain và liên kết mở đúng vị trí trên Google Earth.
 - Nút **Tải ảnh đã clip** dùng route upload Shapefile/GeoJSON, lấy ảnh COG mở qua STAC và clip server-side bằng Rasterio.
+- Có chế độ **DEM địa hình**: Copernicus DEM GLO-30/NASADEM/ALOS AW3D30, mask theo AOI, xuất DEM COG, hillshade, slope, contour và bản đồ PNG/PDF.
+- Ranh giới trên bản đồ chỉ là lớp vector hiển thị: nét xám mảnh, không tô nền đỏ; AOI đang chọn có viền trắng đệm + màu tương phản để tránh nhòe trên nền Google/ảnh vệ tinh.
 - Có backend FastAPI mở trong `backend/app.py` + `backend/clip_pipeline.py`; Earth Engine chỉ là route giám sát tùy chọn.
 
 ## Kiến trúc
 
 ```mermaid
-flowchart LR
-  A[GitHub Pages · Vietflex UI] --> B[ZIP Shapefile / GeoJSON]
-  B --> C[FastAPI · validate CRS + geometry]
-  C --> D[STAC · Sentinel-2/Landsat COG]
-  D --> E[Rasterio mask AOI · COG/PNG]
-  E --> A
+flowchart TB
+  A[GitHub Pages · Vietflex UI] --> B{Sản phẩm}
+  B --> C[Ảnh vệ tinh · Sentinel-2/Landsat]
+  B --> D[DEM/DSM · COG STAC]
+  C --> E[FastAPI · CRS + geometry + mask AOI]
+  D --> E
+  E --> F[COG · GeoJSON · PNG/PDF]
+  F --> A
 ```
 
-Ranh giới hiển thị phía trình duyệt lấy từ PMTiles đã pin để tải nhanh. Khi
-cắt ảnh, backend đọc chính file ranh giới người dùng gửi, bắt buộc CRS, sửa
-hình học, dissolve và dùng cùng AOI cho mọi band:
+Ranh giới hiển thị phía trình duyệt lấy từ PMTiles đã pin để tải nhanh. Lớp này
+không chứa geometry đầy đủ trong `admin.json`, vì vậy không được dùng để suy
+đoán polygon phân tích. Khi cắt ảnh hoặc DEM, backend đọc chính file ranh giới
+người dùng gửi; với mã xã/tỉnh, backend chỉ chấp nhận dataset ranh giới chuẩn
+được cấu hình bằng `ADMIN_BOUNDARIES_PATH` và khớp đúng `admin_code`:
 
 ```text
-read Shapefile → make_valid → dissolve
-rasterio.mask.mask(AOI, crop=True)
+read Shapefile → make_valid → dissolve → kiểm tra CRS
+rasterio geometry_mask(AOI, all_touched=false)
 GeoTIFF mask/NoData + PNG alpha=0 ngoài AOI
 ```
 
@@ -49,6 +55,7 @@ Mở `http://localhost:8080`. Giao diện tải `admin.json` theo commit cố đ
   window.GIAM_SAT_CONFIG = {
     apiBase: "https://api.example.vn",
     clipPath: "/api/v1/clip/jobs",
+    elevationPath: "/api/v1/elevation/jobs",
     monitorPath: "/api/v1/monitor/jobs",
     demoMode: false,
     useLegacyGoogleTiles: true
@@ -113,6 +120,28 @@ API trả `202` và `job_id`. Client poll `GET /api/v1/monitor/jobs/{job_id}` r�
 
 Client từ chối kết quả có `admin_code` khác AOI đang chọn; kết quả không có `clip_verified` chỉ được hiển thị như chưa xác nhận clip.
 
+## Hợp đồng API DEM/DSM
+
+Giao diện gửi `multipart/form-data` tới `POST /api/v1/elevation/jobs`. Có thể
+gửi một file ranh giới hoặc mã hành chính; nếu không gửi file, server phải có
+dataset chuẩn ở `ADMIN_BOUNDARIES_PATH`:
+
+```text
+boundary_file       = ranh_gioi.zip        # tùy chọn nếu dùng admin_code
+admin_code          = 28957                # khớp đúng một feature
+dem_source          = cop-dem-glo30        # cop-dem-glo30 | nasadem | alos-aw3d30
+surface             = dsm                  # global source không tự nhận là DTM
+products            = dem,hillshade,slope,contours,map,preview,geojson
+contour_interval_m  = 10
+output_crs          = auto                 # UTM cục bộ theo AOI
+```
+
+Job trả URL cho `dem.tif`, `hillshade.tif`, `slope.tif`, `contours.gpkg`,
+`contours.geojson`, `preview.png`, `map.png`, `map.pdf` và `aoi.geojson`.
+`clip_verified=true` chỉ được đặt sau khi pixel hợp lệ ngoài AOI bằng 0.
+Pixel DEM không thể có hình dạng polygon trong GeoTIFF chữ nhật; phần ngoài
+ranh giới là NoData/mask và lớp preview có alpha bằng 0.
+
 ## Chạy backend
 
 Route cắt ảnh mở không cần API key Earth Engine. Cài `requirements.txt`, sau đó
@@ -128,6 +157,17 @@ cp .env.example .env
 uvicorn app:app --host 0.0.0.0 --port 8080
 ```
 
+Để dùng dropdown tỉnh/xã cho DEM, chuẩn bị một GeoPackage/GeoJSON/Shapefile có
+một Polygon/MultiPolygon cho mỗi mã, rồi đặt:
+
+```text
+ADMIN_BOUNDARIES_PATH=./data/vn_admin_boundaries.gpkg
+ADMIN_CODE_FIELD=code
+```
+
+Không dùng tên địa danh, centroid hoặc bbox để clip phân tích. Nếu chưa có
+dataset máy chủ, nạp ZIP Shapefile trực tiếp trong giao diện.
+
 Route `/api/v1/monitor/jobs` cũ cần cài thêm `requirements-ee.txt`, cấu hình
 Earth Engine project/asset và Application Default Credentials. Không đưa
 service-account JSON, private key, token STAC hay API key vào frontend. Job
@@ -139,6 +179,7 @@ Pipeline tham chiếu:
 - Sentinel‑2: `COPERNICUS/S2_SR_HARMONIZED`, mask SCL lớp mây/bóng mây, reflectance scale `0.0001`.
 - Landsat 9: `LANDSAT/LC09/C02/T1_L2`, mask `QA_PIXEL`, scale `0.0000275` và offset `-0.2`.
 - Clip ảnh mở: Planetary Computer STAC `sentinel-2-l2a` và `landsat-c2-l2`, đọc COG theo HTTP range.
+- DEM/DSM: Planetary Computer STAC collection có thể cấu hình bằng `DEM_*_COLLECTION`; mặc định Copernicus DEM GLO-30, NASADEM và ALOS DEM.
 - Composite median theo hai khoảng không chồng lấn; chỉ số NBR; ngưỡng thay đổi ban đầu `0.15`.
 - Lọc diện tích tối thiểu/tối đa ở server sau vector hóa; ghi metadata về collection, thời gian, scale, mask, CRS và số cảnh.
 
@@ -150,6 +191,7 @@ Ngưỡng `0.15` chỉ là cấu hình khởi đầu, không phải ngưỡng ph
 - Thuộc tính địa giới: `sapnhap@908cbf40d3dab31bf4deb16bc49dba17cd88bafb/data/admin.json`.
 - Ranh giới PMTiles: `anhmap@e80f4ee9f1e167817e4a9af8402c0bca4052573e/index.html`.
 - Snapshot địa giới là nguồn tham khảo kỹ thuật; kiểm tra văn bản pháp lý gốc trước khi dùng cho quyết định có tính pháp lý.
+- DEM toàn cầu là DSM/DSM-like; vertical datum phụ thuộc sản phẩm. Không dùng trực tiếp cho thiết kế dòng chảy, cao độ công trình hoặc thay thế DTM/LiDAR đã kiểm định.
 - Google Maps/Google Earth, Sentinel‑2 và Landsat có điều khoản ghi nguồn riêng; nền bản đồ và ảnh không thuộc giấy phép mã nguồn Vietflex.
 
 ## GitHub Pages
