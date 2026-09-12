@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b1220">
+  <meta name="description" content="Vietflex Map — nền tảng giám sát biến động rừng bằng ảnh vệ tinh.">
+  <title>Giám sát rừng | Vietflex Map</title>
+  <link rel="preconnect" href="https://unpkg.com">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+  <link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand-lockup">
+        <button class="mobile-menu-button icon-button" id="mobile-menu" type="button" aria-label="Mở bảng điều khiển" aria-controls="control-panel" aria-expanded="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+        </button>
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 42 42"><circle cx="21" cy="21" r="19"/><path d="M9 25c7-1 10-7 13-13 3 7 7 11 12 13M10 29c7-4 15-4 22 0"/><path d="M21 12v19"/></svg>
+        </div>
+        <div>
+          <div class="eyebrow">VIETFLEX MAP · EO MONITORING</div>
+          <h1>Giám sát rừng</h1>
+        </div>
+      </div>
+      <div class="topbar-meta">
+        <span class="system-pill"><span class="status-dot"></span> Hệ thống sẵn sàng</span>
+        <span class="data-pill" id="system-mode">Bản mẫu tĩnh · sẵn sàng nối API</span>
+        <button class="icon-button" id="help-button" type="button" aria-label="Hướng dẫn sử dụng" title="Hướng dẫn sử dụng">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.8 9a2.3 2.3 0 1 1 3.7 1.8c-1.1.8-1.5 1.2-1.5 2.4M12 16.5h.01"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="workspace">
+      <aside class="control-panel" id="control-panel" aria-label="Bộ lọc giám sát">
+        <div class="panel-scroll">
+          <div class="panel-heading">
+            <div>
+              <div class="section-kicker">QUY TRÌNH PHÂN TÍCH</div>
+              <h2>Thiết lập giám sát</h2>
+            </div>
+            <button class="icon-button panel-close" id="panel-close" type="button" aria-label="Đóng bảng điều khiển">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+            </button>
+          </div>
+
+          <div class="workflow-steps" aria-label="Các bước">
+            <div class="workflow-step active"><span>01</span><strong>Khu vực</strong></div>
+            <div class="workflow-line"></div>
+            <div class="workflow-step"><span>02</span><strong>Thời gian</strong></div>
+            <div class="workflow-line"></div>
+            <div class="workflow-step"><span>03</span><strong>Kết quả</strong></div>
+          </div>
+
+          <form id="monitor-form" novalidate>
+            <fieldset>
+              <legend><span class="legend-number">01</span> Phạm vi không gian</legend>
+              <p class="field-hint">Chọn địa bàn cần phát hiện biến động.</p>
+
+              <label class="field-label" for="province">Tỉnh / thành phố</label>
+              <div class="select-wrap">
+                <select id="province" name="province_code" required>
+                  <option value="1" selected>Thành phố Hà Nội</option>
+                </select>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+              </div>
+
+              <label class="field-label" for="district">Quận / huyện / thị xã</label>
+              <div class="select-wrap">
+                <select id="district" name="district_code">
+                  <option value="" selected>-- Quận/Huyện/Thị Xã --</option>
+                </select>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+              </div>
+
+              <label class="field-label" for="commune">Xã / phường / thị trấn</label>
+              <div class="select-wrap">
+                <select id="commune" name="commune_code">
+                  <option value="" selected>-- Xã/Phường/Thị Trấn --</option>
+                </select>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+              </div>
+            </fieldset>
+
+            <fieldset>
+              <legend><span class="legend-number">02</span> Nguồn dữ liệu</legend>
+              <div class="two-col">
+                <div>
+                  <label class="field-label" for="satellite">Vệ tinh</label>
+                  <div class="select-wrap">
+                    <select id="satellite" name="satellite" required>
+                      <option value="s2" selected>Sentinel 2</option>
+                      <option value="landsat9">Landsat 9</option>
+                    </select>
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+                  </div>
+                </div>
+                <div>
+                  <label class="field-label" for="monitor_type">Loại giám sát</label>
+                  <div class="select-wrap">
+                    <select id="monitor_type" name="monitor_type" required>
+                      <option value="-" selected>Biến động giảm</option>
+                      <option value="+">Biến động tăng</option>
+                    </select>
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+                  </div>
+                </div>
+              </div>
+            </fieldset>
+
+            <fieldset>
+              <legend><span class="legend-number">03</span> Khoảng thời gian</legend>
+              <p class="field-hint">Hai khoảng thời gian phải liên tiếp và không chồng lấn.</p>
+              <div class="period-block">
+                <div class="period-title"><span class="period-dot baseline"></span> Đầu kỳ</div>
+                <div class="two-col">
+                  <div>
+                    <label class="field-label" for="start_dk">Từ ngày</label>
+                    <div class="date-input-wrap">
+                      <input id="start_dk" name="start_dk" type="text" inputmode="numeric" autocomplete="off" placeholder="dd/mm/yyyy" required>
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/></svg>
+                    </div>
+                  </div>
+                  <div>
+                    <label class="field-label" for="end_dk">Đến ngày</label>
+                    <div class="date-input-wrap">
+                      <input id="end_dk" name="end_dk" type="text" inputmode="numeric" autocomplete="off" placeholder="dd/mm/yyyy" required>
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/></svg>
+                    </div>
+                  </div>
+                </div>
+                <p class="error-message" id="date-dk-error" role="alert"></p>
+              </div>
+              <div class="period-block">
+                <div class="period-title"><span class="period-dot comparison"></span> Cuối kỳ</div>
+                <div class="two-col">
+                  <div>
+                    <label class="field-label" for="start_ck">Từ ngày</label>
+                    <div class="date-input-wrap">
+                      <input id="start_ck" name="start_ck" type="text" inputmode="numeric" autocomplete="off" placeholder="dd/mm/yyyy" required>
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/></svg>
+                    </div>
+                  </div>
+                  <div>
+                    <label class="field-label" for="end_ck">Đến ngày</label>
+                    <div class="date-input-wrap">
+                      <input id="end_ck" name="end_ck" type="text" inputmode="numeric" autocomplete="off" placeholder="dd/mm/yyyy" required>
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/></svg>
+                    </div>
+                  </div>
+                </div>
+                <p class="error-message" id="date-ck-error" role="alert"></p>
+                <p class="error-message" id="date-overlap-error" role="alert"></p>
+              </div>
+            </fieldset>
+
+            <fieldset>
+              <legend><span class="legend-number">04</span> Ngưỡng diện tích</legend>
+              <p class="field-hint">Lọc các vùng biến động theo diện tích, đơn vị ha.</p>
+              <div class="two-col">
+                <div>
+                  <label class="field-label" for="min_area">Nhỏ nhất</label>
+                  <div class="unit-input-wrap"><input id="min_area" name="min_area" type="number" min="0" step="0.01" value="0.1"><span>ha</span></div>
+                </div>
+                <div>
+                  <label class="field-label" for="max_area">Lớn nhất</label>
+                  <div class="unit-input-wrap"><input id="max_area" name="max_area" type="number" min="0" step="0.01" placeholder="Không giới hạn"><span>ha</span></div>
+                </div>
+              </div>
+              <p class="error-message" id="area-error" role="alert"></p>
+            </fieldset>
+
+            <div class="form-actions">
+              <button class="button button-secondary" id="download-map" type="button" title="Tải kết quả dạng GeoJSON">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 19h14"/></svg>
+                <span>Tải bản đồ</span>
+              </button>
+              <button class="button button-primary" id="calculate-button" type="submit">
+                <span class="button-label">Tính toán</span>
+                <span class="button-spinner" aria-hidden="true"></span>
+                <svg class="button-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13m-5-5 5 5-5 5"/></svg>
+              </button>
+            </div>
+            <p class="form-note"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 10v6M12 7.5h.01"/></svg> Bản đồ kết quả được tạo theo bộ lọc hiện tại.</p>
+          </form>
+        </div>
+        <div class="panel-footer"><span class="brand-mini">V</span> Long Ngo thiết kế · Vietflex Map</div>
+      </aside>
+
+      <main class="map-stage">
+        <div id="map" aria-label="Bản đồ giám sát rừng"></div>
+
+        <div class="map-topbar">
+          <div class="map-search">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
+            <input id="location-search" type="search" placeholder="Tìm địa danh, xã/phường…" aria-label="Tìm địa danh">
+            <kbd>⌘ K</kbd>
+          </div>
+          <div class="map-top-actions">
+            <button class="map-action active" data-basemap="light" type="button"><span class="map-action-swatch light"></span>Sáng</button>
+            <button class="map-action" data-basemap="satellite" type="button"><span class="map-action-swatch satellite"></span>Ảnh vệ tinh</button>
+            <button class="icon-button map-action-icon" id="fullscreen-button" type="button" aria-label="Toàn màn hình" title="Toàn màn hình"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M21 16v5h-5M3 16v5h5"/></svg></button>
+          </div>
+        </div>
+
+        <div class="map-controls">
+          <button class="map-control-button" id="reset-view" type="button" aria-label="Về toàn cảnh" title="Về toàn cảnh"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2.3 5.7M4 4v6h6"/></svg></button>
+          <button class="map-control-button" id="locate-me" type="button" aria-label="Định vị" title="Định vị"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></button>
+          <button class="map-control-button" id="toggle-layers" type="button" aria-label="Lớp bản đồ" title="Lớp bản đồ"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5M3 16l9 5 9-5"/></svg></button>
+        </div>
+
+        <div class="layer-popover" id="layer-popover" hidden>
+          <div class="popover-title">Lớp hiển thị</div>
+          <label class="toggle-row"><input type="checkbox" id="layer-results" checked><span class="toggle-ui"></span><span>Vùng biến động</span></label>
+          <label class="toggle-row"><input type="checkbox" id="layer-boundary" checked><span class="toggle-ui"></span><span>Ranh giới khu vực</span></label>
+          <label class="toggle-row"><input type="checkbox" id="layer-grid"><span class="toggle-ui"></span><span>Lưới tọa độ</span></label>
+        </div>
+
+        <div class="map-context-card">
+          <div class="context-kicker">KHU VỰC PHÂN TÍCH</div>
+          <strong id="map-context-title">Thành phố Hà Nội</strong>
+          <span id="map-context-subtitle">Toàn thành phố · 3.359 km²</span>
+          <div class="context-divider"></div>
+          <div class="context-period"><span class="period-dot baseline"></span><span id="context-baseline">11/03/2026 — 11/06/2026</span></div>
+          <div class="context-period"><span class="period-dot comparison"></span><span id="context-comparison">12/06/2026 — 12/09/2026</span></div>
+        </div>
+
+        <div class="map-legend">
+          <div class="legend-title">CHÚ GIẢI BIẾN ĐỘNG</div>
+          <div class="legend-item"><span class="legend-swatch decrease"></span><span>Giảm / mất phủ xanh</span></div>
+          <div class="legend-item"><span class="legend-swatch increase"></span><span>Tăng / phục hồi phủ xanh</span></div>
+          <div class="legend-item"><span class="legend-swatch boundary"></span><span>Ranh giới phân tích</span></div>
+        </div>
+
+        <div class="map-attribution">Sentinel‑2 · Copernicus <span>•</span> Vietflex Map</div>
+
+        <section class="results-drawer" id="results-drawer" aria-live="polite" hidden>
+          <div class="results-head">
+            <div>
+              <div class="section-kicker">KẾT QUẢ GIÁM SÁT</div>
+              <h2 id="results-title">Chưa có kết quả</h2>
+            </div>
+            <div class="results-head-actions">
+              <button class="text-button" id="download-csv" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 19h14"/></svg> CSV</button>
+              <button class="icon-button" id="close-results" type="button" aria-label="Đóng kết quả"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+            </div>
+          </div>
+          <div class="stats-grid">
+            <div class="stat-card"><span class="stat-label">Vùng phát hiện</span><strong id="stat-count">—</strong><span class="stat-unit">vùng</span></div>
+            <div class="stat-card"><span class="stat-label">Tổng diện tích</span><strong id="stat-area">—</strong><span class="stat-unit">ha</span></div>
+            <div class="stat-card"><span class="stat-label">Lớn nhất</span><strong id="stat-max">—</strong><span class="stat-unit">ha</span></div>
+            <div class="stat-card"><span class="stat-label">Độ tin cậy TB</span><strong id="stat-confidence">—</strong><span class="stat-unit">%</span></div>
+          </div>
+          <div class="results-list-head"><span>Danh sách vùng biến động</span><span id="results-count-label">0 vùng</span></div>
+          <div class="results-list" id="results-list"></div>
+          <div class="results-disclaimer"><span class="status-dot amber"></span> Dữ liệu minh họa phía trình duyệt. Kết nối API xử lý ảnh để dùng dữ liệu Sentinel‑2 thực.</div>
+        </section>
+
+        <div class="map-loading" id="map-loading" hidden>
+          <div class="loading-card">
+            <div class="loading-spinner"></div>
+            <div>
+              <strong id="loading-title">Đang chuẩn bị phân tích</strong>
+              <span id="loading-step">Đọc bộ lọc không gian…</span>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
+  <dialog class="help-dialog" id="help-dialog">
+    <div class="dialog-head"><div><div class="section-kicker">HƯỚNG DẪN NHANH</div><h2>Giám sát rừng hoạt động thế nào?</h2></div><button class="icon-button" id="close-help" type="button" aria-label="Đóng"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+    <div class="help-content"><p>Chọn địa bàn, vệ tinh, loại biến động và hai khoảng thời gian. Công cụ sẽ trả về các vùng có thay đổi vượt ngưỡng diện tích.</p><div class="help-rule"><span>01</span><div><strong>Đầu kỳ và cuối kỳ</strong><small>Khoảng đầu kỳ phải kết thúc trước ngày bắt đầu cuối kỳ.</small></div></div><div class="help-rule"><span>02</span><div><strong>Ngưỡng diện tích</strong><small>Đặt diện tích nhỏ nhất để giảm nhiễu các vùng rất nhỏ.</small></div></div><div class="help-rule"><span>03</span><div><strong>Độ tin cậy</strong><small>Luôn kiểm tra ảnh gốc, mây và thực địa trước khi ra quyết định.</small></div></div></div>
+  </dialog>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="assets/app.js"></script>
+</body>
+</html>
