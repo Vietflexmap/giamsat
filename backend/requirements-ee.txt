@@ -1,0 +1,2 @@
+# Optional Earth Engine dependency for the legacy /api/v1/monitor/jobs route.
+earthengine-api==1.5.14
