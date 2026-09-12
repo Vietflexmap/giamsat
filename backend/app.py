@@ -148,6 +148,22 @@ def fingerprint(request: MonitorRequest) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def prune_jobs_locked() -> None:
+    """Keep the reference in-memory store bounded; caller holds JOB_LOCK."""
+
+    ttl_seconds = env_int("JOB_TTL_SECONDS", 3600)
+    cutoff = datetime.now(timezone.utc).timestamp() - max(ttl_seconds, 60)
+    for job_id, job in list(JOBS.items()):
+        try:
+            updated = datetime.fromisoformat(job.updated_at).timestamp()
+        except ValueError:
+            continue
+        if updated < cutoff and job.status in {"completed", "failed"}:
+            JOBS.pop(job_id, None)
+            if FINGERPRINTS.get(job.fingerprint) == job_id:
+                FINGERPRINTS.pop(job.fingerprint, None)
+
+
 def initialize_earth_engine() -> None:
     """Initialize once; deployment supplies ADC or Workload Identity."""
 
@@ -401,6 +417,7 @@ def healthz() -> dict[str, str]:
 def create_monitor_job(request: MonitorRequest) -> dict[str, Any]:
     key = fingerprint(request)
     with JOB_LOCK:
+        prune_jobs_locked()
         existing_id = FINGERPRINTS.get(key)
         if existing_id and existing_id in JOBS and JOBS[existing_id].status in {"queued", "running", "completed"}:
             return job_status(JOBS[existing_id])
