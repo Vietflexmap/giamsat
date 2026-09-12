@@ -1,51 +1,70 @@
-# Vietflex Map · Giám sát rừng
+# Vietflex Map · Giám sát biến động theo ranh giới hành chính
 
-WebGIS tĩnh tái tạo luồng giao diện của [gsrvn.ifee.edu.vn/country](https://gsrvn.ifee.edu.vn/country/) và tối ưu lại cho màn hình máy tính, máy tính bảng và điện thoại.
+WebGIS static-first cho GitHub Pages, dùng [Vietflexmap/VN](https://github.com/Vietflexmap/VN) làm lõi bản đồ, snapshot địa giới hiện hành từ [Vietflexmap/sapnhap](https://github.com/Vietflexmap/sapnhap) và lớp ranh giới PMTiles từ [Vietflexmap/anhmap](https://github.com/Vietflexmap/anhmap).
 
-## Đã triển khai
+## Đã cải tiến
 
-- Bộ lọc địa bàn ba cấp: tỉnh/thành phố → quận/huyện/thị xã → xã/phường/thị trấn.
-- Chọn Sentinel‑2 hoặc Landsat 9, loại biến động tăng/giảm.
-- Hai khoảng thời gian `dd/mm/yyyy`, kiểm tra ngày không hợp lệ, ngày tương lai và khoảng chồng lấn.
-- Lọc diện tích nhỏ nhất/lớn nhất theo ha.
-- Bản đồ Leaflet với nền sáng, nền tối, ảnh vệ tinh, ranh giới, lưới tọa độ và vùng biến động.
-- Bảng kết quả gồm số vùng, tổng diện tích, vùng lớn nhất, độ tin cậy trung bình và danh sách có thể phóng đến từng vùng.
-- Tải kết quả GeoJSON và CSV; popup hiển thị thuộc tính từng vùng.
-- Giao diện responsive, keyboard shortcut `Ctrl/⌘ + K`, định vị, toàn màn hình và hướng dẫn nhanh.
+- Chọn **34 tỉnh/thành → phường/xã/đặc khu** theo snapshot 2025–2026: 3.321 đơn vị cấp xã, gồm 697 phường, 2.611 xã và 13 đặc khu.
+- Không còn danh sách quận/huyện và mã 63 tỉnh cũ trong luồng mặc định.
+- Click polygon PMTiles hoặc dùng bộ chọn để xác định AOI; giao diện chỉ gửi mã ĐVHC, không tin geometry do trình duyệt tự vẽ.
+- Vietflex làm map core; có Google Maps roadmap, satellite, hybrid, terrain và liên kết mở đúng vị trí trên Google Earth.
+- Nút **Tải ảnh đã clip** chỉ mở URL ảnh/GeoTIFF do backend trả về. Chế độ demo được gắn rõ `clip_verified: false`.
+- Có backend FastAPI tham chiếu trong `backend/app.py`; backend resolve mã AOI từ Earth Engine asset rồi dùng cùng geometry cho ảnh, vector và vùng download.
 
-## Chạy cục bộ
+## Kiến trúc
 
-Mở `index.html` bằng một web server tĩnh để trình duyệt tải đúng các module và tile bản đồ:
+```mermaid
+flowchart LR
+  A[GitHub Pages · Vietflex UI] --> B[Mã ĐVHC AOI]
+  B --> C[FastAPI job API]
+  C --> D[Earth Engine · Sentinel-2/Landsat]
+  D --> E[Clip AOI · GeoJSON · PNG/GeoTIFF]
+  E --> A
+```
+
+Ranh giới hiển thị phía trình duyệt lấy từ PMTiles đã pin để tải nhanh. Khi phân tích thật, backend không nhận polygon tùy ý từ client: nó lookup `admin_code` trong `EE_ADMIN_ASSET`, kiểm tra đúng một feature, sau đó thực hiện:
+
+```text
+image.clip(AOI)
+reduceToVectors(geometry=AOI)
+download/getThumbURL(region=AOI)
+```
+
+Diện tích `area_ha` được tính bằng `EPSG:6933` (equal-area), còn GeoJSON trả về dùng tọa độ WGS84 để hiển thị trên bản đồ web.
+
+## Chạy giao diện
 
 ```bash
 python3 -m http.server 8080
 ```
 
-Sau đó truy cập `http://localhost:8080`.
+Mở `http://localhost:8080`. Giao diện tải `admin.json` theo commit cố định và nạp PMTiles từ `anhmap` theo commit cố định. Nếu chỉ muốn kiểm thử UI, giữ cấu hình demo mặc định.
 
-## Chế độ dữ liệu
-
-Repository này là front-end static-first. Khi chưa cấu hình API, nút **Tính toán** dùng một bộ dữ liệu minh họa được tạo cố định theo bộ lọc; mục đích là kiểm tra đầy đủ UX/UI, popup, thống kê và chức năng tải xuống. Đây không phải kết quả phân tích Sentinel‑2 thực.
-
-Để nối hệ thống xử lý ảnh thật, thêm cấu hình trước `assets/app.js` hoặc ngay trước thẻ script của file này:
+Để nối API thật, thêm trước thẻ `assets/app.js`:
 
 ```html
 <script>
   window.GIAM_SAT_CONFIG = {
     apiBase: "https://api.example.vn",
-    apiPath: "/api/monitor",
-    demoMode: false
+    monitorPath: "/api/v1/monitor/jobs",
+    demoMode: false,
+    useLegacyGoogleTiles: true
   };
 </script>
 ```
 
-Client gửi `POST /api/monitor` với JSON:
+`useLegacyGoogleTiles: true` bám đúng adapter tương thích trong Vietflex và không cần khóa, nhưng URL Google legacy không phải Map Tiles API công khai được Google cam kết ổn định. Production nên cấp `googleApiKey` runtime cho Map Tiles API chính thức, giới hạn theo HTTP referrer/API và tuân thủ attribution. Không commit khóa vào repository.
+
+## Hợp đồng API
+
+Giao diện gửi `POST /api/v1/monitor/jobs`:
 
 ```json
 {
-  "province_code": "1",
-  "district_code": "",
-  "commune_code": "",
+  "admin_code": "00004",
+  "admin_level": "commune",
+  "province_code": "01",
+  "unit_code": "00004",
   "satellite": "s2",
   "monitor_type": "-",
   "start_dk": "11/03/2026",
@@ -53,43 +72,60 @@ Client gửi `POST /api/monitor` với JSON:
   "start_ck": "12/06/2026",
   "end_ck": "12/09/2026",
   "min_area": 0.1,
-  "max_area": null
+  "max_area": null,
+  "clip_to_admin_boundary": true,
+  "output": ["geojson", "geotiff", "png"]
 }
 ```
 
-API cần trả về GeoJSON `FeatureCollection`. Các thuộc tính tối thiểu của mỗi feature:
+API trả `202` và `job_id`. Client poll `GET /api/v1/monitor/jobs/{job_id}` rồi tải `result_url`. GeoJSON cần có metadata tương tự:
 
 ```json
 {
-  "type": "Feature",
-  "properties": {
-    "id": "GS-001",
-    "name": "Vùng 01",
-    "locality": "Huyện Ba Vì",
-    "area_ha": 1.42,
-    "confidence": 91,
-    "monitor_type": "-",
-    "monitor_label": "Biến động giảm",
-    "satellite": "Sentinel 2",
-    "period": "12/06/2026 — 12/09/2026",
-    "centroid": "21.15200, 105.42400"
-  },
-  "geometry": { "type": "Polygon", "coordinates": [] }
+  "clip_verified": true,
+  "admin_code": "00004",
+  "clip_method": "ee.Image.clip(AOI) + reduceToVectors(geometry=AOI)",
+  "area_crs": "EPSG:6933",
+  "geotiff_url": "https://..."
 }
 ```
 
-Backend production nên chịu trách nhiệm cho STAC/Earth Engine, lọc mây, đồng chuẩn hóa ảnh, tính chỉ số (ví dụ NDVI/NBR), phát hiện thay đổi, khử nhiễu theo diện tích, chuyển polygon về CRS đo diện tích phù hợp và ghi nhận nguồn ảnh/thời điểm xử lý. Front-end chỉ hiển thị kết quả GeoJSON đã được kiểm tra.
+Client từ chối kết quả có `admin_code` khác AOI đang chọn; kết quả không có `clip_verified` chỉ được hiển thị như chưa xác nhận clip.
 
-## Đối chiếu source gốc
+## Chạy backend tham chiếu
 
-Source gốc sử dụng Alpine.js, HTMX, Choice.js và Flatpickr; form gọi các endpoint `/map_and_subunits/`, `/initial/1` và `/deforest_country_watch/`. Bản này giữ lại cấu trúc nghiệp vụ chính nhưng chuyển phần vỏ sang static WebGIS để có thể chạy độc lập trên GitHub Pages. Khi có backend mới, chỉ cần thay `GIAM_SAT_CONFIG` và danh mục địa giới bằng dữ liệu API chính thức.
+Backend cần một Earth Engine FeatureCollection chứa cùng mã địa giới với `sapnhap/admin.json`. Mã phải là chuỗi và duy nhất.
 
-## Bản quyền dữ liệu nền
+```bash
+cd backend
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+uvicorn app:app --host 0.0.0.0 --port 8080
+```
 
-Nền sáng/tối dùng OpenStreetMap/CARTO; nền ảnh vệ tinh dùng Esri World Imagery. Hãy giữ attribution và kiểm tra điều khoản dịch vụ trước khi triển khai thương mại.
+Trong deployment, dùng Application Default Credentials hoặc Workload Identity. Không đưa service-account JSON, private key, Earth Engine asset bí mật hay API key vào frontend. Job store trong ví dụ là in-memory; production nhiều instance cần Redis/Postgres + hàng đợi và Cloud Storage/COG cho AOI lớn.
+
+Pipeline tham chiếu:
+
+- Sentinel‑2: `COPERNICUS/S2_SR_HARMONIZED`, mask SCL lớp mây/bóng mây, reflectance scale `0.0001`.
+- Landsat 9: `LANDSAT/LC09/C02/T1_L2`, mask `QA_PIXEL`, scale `0.0000275` và offset `-0.2`.
+- Composite median theo hai khoảng không chồng lấn; chỉ số NBR; ngưỡng thay đổi ban đầu `0.15`.
+- Lọc diện tích tối thiểu/tối đa ở server sau vector hóa; ghi metadata về collection, thời gian, scale, mask, CRS và số cảnh.
+
+Ngưỡng `0.15` chỉ là cấu hình khởi đầu, không phải ngưỡng pháp lý. Cần hiệu chỉnh theo mùa, chất lượng ảnh và kiểm định thực địa trước khi dùng cho quyết định quản lý rừng.
+
+## Nguồn và giới hạn
+
+- Vietflex CDN và source: `VN@6144d565fcf236727577ab3c4471bbe49f86892f`.
+- Thuộc tính địa giới: `sapnhap@908cbf40d3dab31bf4deb16bc49dba17cd88bafb/data/admin.json`.
+- Ranh giới PMTiles: `anhmap@e80f4ee9f1e167817e4a9af8402c0bca4052573e/index.html`.
+- Snapshot địa giới là nguồn tham khảo kỹ thuật; kiểm tra văn bản pháp lý gốc trước khi dùng cho quyết định có tính pháp lý.
+- Google Maps/Google Earth, Sentinel‑2 và Landsat có điều khoản ghi nguồn riêng; nền bản đồ và ảnh không thuộc giấy phép mã nguồn Vietflex.
+
+## GitHub Pages
+
+Workflow nằm tại `.github/workflows/pages.yml` và hiện chạy thủ công để không lỗi khi Pages chưa bật. Vào `Settings → Pages`, chọn `Source: GitHub Actions`, sau đó chạy `Deploy Vietflex Map WebGIS` trong tab **Actions**. Backend không nên chạy trên GitHub Pages; triển khai riêng trên Cloud Run hoặc máy chủ có HTTPS.
 
 Thiết kế: **Long Ngo · Vietflex Map**.
-
-## Bật GitHub Pages
-
-Workflow triển khai được đặt tại `.github/workflows/pages.yml` và đang để chế độ chạy thủ công để tránh lỗi khi Pages chưa được bật. Vào `Settings → Pages`, chọn `Source: GitHub Actions`, sau đó vào tab `Actions` và chạy `Deploy Vietflex Map WebGIS`. Những lần cập nhật sau có thể đổi trigger sang `push` trên nhánh `main` nếu muốn tự động triển khai.
