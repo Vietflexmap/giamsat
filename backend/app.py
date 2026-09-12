@@ -1,13 +1,12 @@
-"""FastAPI reference service for clipped Sentinel-2/Landsat change results.
+"""FastAPI service for open imagery clipping and optional change monitoring.
 
 The service is intentionally small enough to deploy on Cloud Run, while making
 the important spatial invariants explicit:
 
-* the client sends an administrative code, never arbitrary geometry;
-* the server resolves that code from a configured Earth Engine asset;
-* imagery, vectors and download regions all use the same AOI geometry;
+* the primary clip route accepts a complete boundary file and validates it;
+* imagery is read from open STAC COG assets and masked with the dissolved AOI;
 * GeoJSON is WGS84, while reported hectares use an equal-area projection;
-* credentials and the Earth Engine asset ID stay outside the public frontend.
+* the legacy Earth Engine monitor route is optional and keeps credentials server-side.
 
 For a multi-instance production deployment, replace the in-memory job store
 with a durable queue/result store and use Cloud Storage for GeoJSON/COG files.
@@ -19,17 +18,28 @@ import hashlib
 import json
 import logging
 import os
+import shutil
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Literal
 
-import ee
-from fastapi import FastAPI, HTTPException
+try:
+    import ee
+except ImportError:  # Earth Engine is optional; open STAC clipping is the default.
+    ee = None  # type: ignore[assignment]
+
+try:
+    from .clip_pipeline import ClipParameters, run_clip_pipeline, validate_clip_parameters
+except ImportError:  # Supports `uvicorn app:app` when the backend directory is cwd.
+    from clip_pipeline import ClipParameters, run_clip_pipeline, validate_clip_parameters
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
@@ -43,6 +53,8 @@ S2_SCALE = 10
 LANDSAT_SCALE = 30
 CHANGE_THRESHOLD = 0.15
 MAX_AOI_AREA_KM2 = 250_000
+OUTPUT_ROOT = Path(os.getenv("OUTPUT_ROOT", "./outputs")).resolve()
+MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 
 
 def env_int(name: str, default: int) -> int:
@@ -50,6 +62,9 @@ def env_int(name: str, default: int) -> int:
         return int(os.getenv(name, str(default)))
     except ValueError:
         return default
+
+
+MAX_UPLOAD_BYTES = env_int("MAX_BOUNDARY_UPLOAD_BYTES", MAX_UPLOAD_BYTES)
 
 
 def utc_now() -> str:
@@ -112,8 +127,26 @@ class Job:
     error: str | None = None
 
 
+@dataclass
+class ClipJob:
+    """A file-backed open-imagery clipping job."""
+
+    job_id: str
+    boundary_path: Path
+    boundary_filename: str
+    output_dir: Path
+    parameters: ClipParameters
+    status: str = "queued"
+    message: str = "Đã xếp hàng"
+    created_at: str = field(default_factory=utc_now)
+    updated_at: str = field(default_factory=utc_now)
+    result: dict[str, Any] | None = None
+    error: str | None = None
+
+
 JOBS: dict[str, Job] = {}
 FINGERPRINTS: dict[str, str] = {}
+CLIP_JOBS: dict[str, ClipJob] = {}
 JOB_LOCK = threading.Lock()
 EXECUTOR = ThreadPoolExecutor(max_workers=env_int("JOB_WORKERS", 2), thread_name_prefix="ee-job")
 EE_LOCK = threading.Lock()
@@ -133,11 +166,23 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type", "Accept"],
 )
+OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+app.mount("/api/v1/files", StaticFiles(directory=str(OUTPUT_ROOT)), name="clip-files")
 
 
 def update_job(job_id: str, **changes: Any) -> None:
     with JOB_LOCK:
         job = JOBS[job_id]
+        for key, value in changes.items():
+            setattr(job, key, value)
+        job.updated_at = utc_now()
+
+
+def update_clip_job(job_id: str, **changes: Any) -> None:
+    """Update a clip job atomically for the polling API."""
+
+    with JOB_LOCK:
+        job = CLIP_JOBS[job_id]
         for key, value in changes.items():
             setattr(job, key, value)
         job.updated_at = utc_now()
@@ -164,10 +209,27 @@ def prune_jobs_locked() -> None:
                 FINGERPRINTS.pop(job.fingerprint, None)
 
 
+def prune_clip_jobs_locked() -> None:
+    """Remove completed clip artifacts after the configured retention time."""
+
+    ttl_seconds = env_int("JOB_TTL_SECONDS", 3600)
+    cutoff = datetime.now(timezone.utc).timestamp() - max(ttl_seconds, 60)
+    for job_id, job in list(CLIP_JOBS.items()):
+        try:
+            updated = datetime.fromisoformat(job.updated_at).timestamp()
+        except ValueError:
+            continue
+        if updated < cutoff and job.status in {"completed", "failed"}:
+            CLIP_JOBS.pop(job_id, None)
+            shutil.rmtree(job.output_dir, ignore_errors=True)
+
+
 def initialize_earth_engine() -> None:
     """Initialize once; deployment supplies ADC or Workload Identity."""
 
     global EE_INITIALIZED
+    if ee is None:
+        raise RuntimeError("Earth Engine chưa được cài; dùng /api/v1/clip/jobs hoặc cài requirements-ee.txt.")
     if EE_INITIALIZED:
         return
     with EE_LOCK:
@@ -408,9 +470,140 @@ def job_status(job: Job) -> dict[str, Any]:
     return payload
 
 
+def clip_job_status(job: ClipJob) -> dict[str, Any]:
+    """Serialize an open-imagery clip job for the frontend poller."""
+
+    payload: dict[str, Any] = {
+        "job_id": job.job_id,
+        "status": job.status,
+        "message": job.message,
+        "created_at": job.created_at,
+        "updated_at": job.updated_at,
+        "status_url": f"/api/v1/clip/jobs/{job.job_id}",
+    }
+    if job.status == "completed":
+        payload["result_url"] = f"/api/v1/clip/jobs/{job.job_id}/results.geojson"
+        payload["metadata"] = job.result.get("metadata", {}) if job.result else {}
+    if job.status == "failed":
+        payload["error"] = job.error or "Clip job thất bại."
+    return payload
+
+
+async def persist_upload(upload: UploadFile, destination: Path) -> int:
+    """Stream an uploaded boundary to disk without exceeding the size cap."""
+
+    total = 0
+    with destination.open("wb") as target:
+        while True:
+            chunk = await upload.read(1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > MAX_UPLOAD_BYTES:
+                limit_mb = MAX_UPLOAD_BYTES // (1024 * 1024)
+                raise HTTPException(status_code=413, detail=f"Tệp ranh giới vượt quá giới hạn {limit_mb} MB.")
+            target.write(chunk)
+    if total == 0:
+        raise HTTPException(status_code=400, detail="Tệp ranh giới rỗng.")
+    return total
+
+
+def run_clip_job(job_id: str) -> None:
+    """Execute one open STAC clip in a worker and remove the uploaded source."""
+
+    job = CLIP_JOBS[job_id]
+    update_clip_job(job_id, status="running", message="Đang kiểm tra CRS và hình học ranh giới…")
+    try:
+        result = run_clip_pipeline(
+            boundary_upload=job.boundary_path,
+            boundary_filename=job.boundary_filename,
+            parameters=job.parameters,
+            output_dir=job.output_dir,
+            public_prefix=f"/api/v1/files/{job.job_id}",
+        )
+        update_clip_job(job_id, status="completed", message="Đã cắt ảnh theo AOI và kiểm tra mask.", result=result)
+    except Exception as error:  # The job endpoint returns a safe message, not credentials or paths.
+        LOGGER.exception("Clip job %s failed", job_id)
+        update_clip_job(job_id, status="failed", message="Clip job thất bại.", error=str(error))
+    finally:
+        job.boundary_path.unlink(missing_ok=True)
+
+
+@app.post("/api/v1/clip/jobs", status_code=202)
+async def create_clip_job(
+    boundary_file: UploadFile = File(...),
+    satellite: str = Form("s2"),
+    start_date: str = Form(...),
+    end_date: str = Form(...),
+    cloud_max: float = Form(80.0),
+    output: str = Form("geotiff,png,geojson"),
+    render_mode: str = Form("true_color"),
+) -> dict[str, Any]:
+    """Queue a Shapefile/GeoJSON clip against an open STAC image."""
+
+    try:
+        parameters = validate_clip_parameters(satellite, start_date, end_date, cloud_max, output, render_mode)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    filename = Path(boundary_file.filename or "boundary.zip").name
+    if not filename or filename in {".", ".."}:
+        raise HTTPException(status_code=400, detail="Tên tệp ranh giới không hợp lệ.")
+    job_id = uuid.uuid4().hex
+    output_dir = OUTPUT_ROOT / job_id
+    output_dir.mkdir(parents=True, exist_ok=False)
+    boundary_path = output_dir / f"upload{Path(filename).suffix.lower()}"
+    try:
+        size = await persist_upload(boundary_file, boundary_path)
+    except HTTPException:
+        shutil.rmtree(output_dir, ignore_errors=True)
+        raise
+    except Exception as error:
+        shutil.rmtree(output_dir, ignore_errors=True)
+        raise HTTPException(status_code=400, detail=f"Không lưu được tệp ranh giới: {error}") from error
+    finally:
+        await boundary_file.close()
+
+    job = ClipJob(
+        job_id=job_id,
+        boundary_path=boundary_path,
+        boundary_filename=filename,
+        output_dir=output_dir,
+        parameters=parameters,
+    )
+    with JOB_LOCK:
+        prune_clip_jobs_locked()
+        CLIP_JOBS[job_id] = job
+    LOGGER.info("Queued clip job %s: file=%s bytes=%s sensor=%s", job_id, filename, size, parameters.satellite)
+    EXECUTOR.submit(run_clip_job, job_id)
+    return clip_job_status(job)
+
+
+@app.get("/api/v1/clip/jobs/{job_id}")
+def get_clip_job(job_id: str) -> dict[str, Any]:
+    """Return clip job state for frontend polling."""
+
+    job = CLIP_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Không tìm thấy clip job.")
+    return clip_job_status(job)
+
+
+@app.get("/api/v1/clip/jobs/{job_id}/results.geojson")
+def get_clip_result(job_id: str) -> JSONResponse:
+    """Return clip metadata and the audit GeoJSON envelope."""
+
+    job = CLIP_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Không tìm thấy clip job.")
+    if job.status != "completed" or not job.result:
+        raise HTTPException(status_code=409, detail=f"Clip job chưa hoàn tất: {job.status}.")
+    return JSONResponse(content=job.result, media_type="application/geo+json")
+
+
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
-    return {"status": "ok", "service": "vietflex-monitor"}
+    return {"status": "ok", "service": "vietflex-clip-monitor"}
 
 
 @app.post("/api/v1/monitor/jobs", status_code=202)
