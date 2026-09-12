@@ -1,4 +1,13 @@
-earthengine-api==1.5.14
 fastapi==0.115.12
+geopandas==1.0.1
+numpy==2.2.4
+planetary-computer==1.0.0
+pillow==11.2.1
 pydantic==2.11.3
+pyogrio==0.10.0
+pystac-client==0.8.5
+pyproj==3.7.1
+python-multipart==0.0.20
+rasterio==1.4.3
+shapely==2.1.0
 uvicorn[standard]==0.34.2
