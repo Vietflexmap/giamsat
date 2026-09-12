@@ -87,6 +87,15 @@
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
               </div>
               <p class="boundary-hint" id="boundary-status">Ranh giới sẽ được lấy từ snapshot Vietflexmap/anhmap.</p>
+              <label class="field-label" for="boundary-file">Hoặc nạp ranh giới Shapefile</label>
+              <div class="file-input-wrap">
+                <input id="boundary-file" name="boundary_file" type="file" accept=".zip,.geojson,.json" aria-describedby="boundary-file-status">
+                <label class="file-input-label" for="boundary-file">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M5 13v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5"/></svg>
+                  <span>Chọn ZIP Shapefile hoặc GeoJSON</span>
+                </label>
+              </div>
+              <p class="boundary-file-status" id="boundary-file-status">ZIP phải chứa cùng tên: .shp, .shx, .dbf và .prj. Backend sẽ cắt ảnh theo toàn bộ hình học.</p>
             </fieldset>
 
             <fieldset>
@@ -188,7 +197,7 @@
                 <svg class="button-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13m-5-5 5 5-5 5"/></svg>
               </button>
             </div>
-            <p class="form-note"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 10v6M12 7.5h.01"/></svg> AOI gửi lên backend là mã ranh giới hành chính đã chọn; ảnh và vector kết quả phải được clip theo AOI đó.</p>
+            <p class="form-note"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 10v6M12 7.5h.01"/></svg> Có thể dùng mã xã đã chọn hoặc nạp một tệp ranh giới. Khi có tệp, hệ thống ưu tiên cắt ảnh mở theo hình học trong tệp.</p>
           </form>
         </div>
         <div class="panel-footer"><span class="brand-mini">V</span> Long Ngo thiết kế · Vietflex Map</div>
