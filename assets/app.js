@@ -14,6 +14,7 @@
     apiBase: "",
     demoMode: true,
     monitorPath: "/api/v1/monitor/jobs",
+    clipPath: "/api/v1/clip/jobs",
     adminDataUrl: "https://raw.githubusercontent.com/Vietflexmap/sapnhap/908cbf40d3dab31bf4deb16bc49dba17cd88bafb/data/admin.json",
     boundaryHtmlUrls: [
       "https://cdn.jsdelivr.net/gh/Vietflexmap/anhmap@e80f4ee9f1e167817e4a9af8402c0bca4052573e/index.html"
@@ -44,6 +45,7 @@
     selectedProvince: null,
     selectedUnit: null,
     selectedBoundary: null,
+    boundaryFile: null,
     boundaryRecords: [],
     boundaryByCode: new Map(),
     boundaryByProvince: new Map(),
@@ -233,6 +235,46 @@
     else state.selectedUnit = null;
   }
 
+  const MAX_BOUNDARY_FILE_BYTES = 200 * 1024 * 1024;
+
+  function setBoundaryFileStatus(message, kind = "") {
+    const node = $("#boundary-file-status");
+    if (!node) return;
+    node.classList.toggle("is-ready", kind === "ready");
+    node.classList.toggle("is-error", kind === "error");
+    node.textContent = message;
+  }
+
+  function handleBoundaryFile(event) {
+    const file = event.target.files?.[0] || null;
+    state.boundaryFile = null;
+    if (!file) {
+      setBoundaryFileStatus("ZIP phải chứa cùng tên: .shp, .shx, .dbf và .prj. Backend sẽ cắt ảnh theo toàn bộ hình học.");
+      updateSystemMode();
+      return;
+    }
+    const filename = String(file.name || "");
+    const extension = filename.toLowerCase().split(".").pop();
+    if (!["zip", "geojson", "json"].includes(extension)) {
+      event.target.value = "";
+      setBoundaryFileStatus("Chỉ nhận ZIP Shapefile hoặc GeoJSON.", "error");
+      showToast("Tệp ranh giới không đúng định dạng.", "error");
+      return;
+    }
+    if (file.size > MAX_BOUNDARY_FILE_BYTES) {
+      event.target.value = "";
+      setBoundaryFileStatus("Tệp vượt quá giới hạn 200 MB.", "error");
+      showToast("Tệp ranh giới quá lớn.", "error");
+      return;
+    }
+    state.boundaryFile = file;
+    const backendNote = CONFIG.apiBase && !CONFIG.demoMode
+      ? "Sẵn sàng gửi backend để kiểm tra CRS và clip."
+      : "Đã chọn; cần kết nối backend clip để xử lý ảnh thật.";
+    setBoundaryFileStatus(`${filename} · ${(file.size / 1024 / 1024).toFixed(2)} MB · ${backendNote}`, "ready");
+    updateSystemMode();
+  }
+
   function getLocation() {
     const province = state.selectedProvince || state.provinceByValue.get($("#province")?.value);
     const unit = state.selectedUnit;
@@ -248,7 +290,8 @@
       unitLabel: unit?.full_name || "",
       adminCode,
       adminLevel: unit ? "commune" : "province",
-      adminName
+      adminName,
+      boundaryFile: state.boundaryFile
     };
   }
 
@@ -736,8 +779,8 @@
     return payload;
   }
 
-  async function pollJob(job) {
-    const statusUrl = job.status_url ? new URL(job.status_url, CONFIG.apiBase).href : apiUrl(`${CONFIG.monitorPath.replace(/\/$/, "")}/${encodeURIComponent(job.job_id)}`);
+  async function pollJob(job, path = CONFIG.monitorPath) {
+    const statusUrl = job.status_url ? new URL(job.status_url, CONFIG.apiBase).href : apiUrl(`${path.replace(/\/$/, "")}/${encodeURIComponent(job.job_id)}`);
     for (let attempt = 0; attempt < 90; attempt += 1) {
       await wait(1000);
       const payload = await readJSON(await fetch(statusUrl, { headers: { Accept: "application/json" } }));
@@ -754,7 +797,30 @@
     throw new Error("Job quá thời gian chờ ở giao diện. Có thể kiểm tra lại bằng mã job.");
   }
 
+  async function calculateClipFile(params) {
+    if (!CONFIG.apiBase || CONFIG.demoMode) {
+      throw new Error("Cắt ảnh theo Shapefile cần backend clip. Hãy cấu hình apiBase và demoMode:false.");
+    }
+    const body = new FormData();
+    body.append("boundary_file", params.boundaryFile, params.boundaryFile.name);
+    body.append("satellite", params.satellite);
+    body.append("start_date", params.startCK);
+    body.append("end_date", params.endCK);
+    body.append("cloud_max", "80");
+    body.append("output", "geotiff,png,geojson");
+    body.append("render_mode", "true_color");
+    const response = await fetch(apiUrl(CONFIG.clipPath), {
+      method: "POST",
+      headers: { Accept: "application/json, application/geo+json" },
+      body
+    });
+    const payload = await readJSON(response);
+    const collection = payload.job_id ? await pollJob(payload, CONFIG.clipPath) : payload;
+    return normalizeCollection(collection, Object.assign({}, params, { clipMode: "file" }));
+  }
+
   async function calculate(params) {
+    if (params.boundaryFile) return calculateClipFile(params);
     if (!CONFIG.apiBase || CONFIG.demoMode) {
       await wait(420);
       return buildDemoCollection(params);
@@ -792,12 +858,17 @@
     state.resultLayer.addData(collection);
     updateStats(collection);
     $("#results-drawer").hidden = false;
-    $("#results-title").textContent = collection.features.length ? "Đã phát hiện biến động" : "Không có vùng phù hợp";
     const metadata = collection.metadata || {};
     const verified = metadata.clip_verified === true;
-    $("#results-disclaimer").innerHTML = verified
-      ? `<span class="status-dot"></span> Kết quả đã được backend xác nhận clip theo AOI <code>${escapeHTML(metadata.admin_code || params.adminCode)}</code>. Ảnh tải xuống dùng cùng geometry.`
-      : `<span class="status-dot amber"></span> Chế độ minh họa phía trình duyệt; chưa phải kết quả ảnh vệ tinh và chưa xác nhận clip hình học.`;
+    const isClip = metadata.operation === "clip";
+    $("#results-title").textContent = isClip
+      ? "Đã cắt ảnh theo ranh giới"
+      : collection.features.length ? "Đã phát hiện biến động" : "Không có vùng phù hợp";
+    $("#results-disclaimer").innerHTML = verified && isClip
+      ? `<span class="status-dot"></span> Ảnh mở đã được backend clip theo tệp ranh giới <code>${escapeHTML(metadata.boundary_filename || "Shapefile")}</code>. Pixel ngoài AOI là NoData/alpha.`
+      : verified
+        ? `<span class="status-dot"></span> Kết quả đã được backend xác nhận clip theo AOI <code>${escapeHTML(metadata.admin_code || params.adminCode)}</code>. Ảnh tải xuống dùng cùng geometry.`
+        : `<span class="status-dot amber"></span> Chế độ minh họa phía trình duyệt; chưa phải kết quả ảnh vệ tinh và chưa xác nhận clip hình học.`;
     $("#map-attribution").innerHTML = `${escapeHTML(params.satelliteLabel)} · Copernicus/USGS <span>•</span> Vietflex Map <span>•</span> AOI ${escapeHTML(params.adminCode)}`;
   }
 
@@ -846,6 +917,12 @@
   function updateSystemMode() {
     const mode = $("#system-mode");
     if (!mode) return;
+    if (state.boundaryFile) {
+      mode.textContent = CONFIG.apiBase && !CONFIG.demoMode
+        ? "Cắt ảnh SHP · STAC/COG backend"
+        : "SHP đã chọn · chờ backend clip";
+      return;
+    }
     mode.textContent = CONFIG.apiBase && !CONFIG.demoMode
       ? "Backend clip AOI · job API"
       : `Demo UI · ${EXPECTED_ADMIN.units.toLocaleString("vi-VN")} đơn vị hành chính`;
@@ -855,7 +932,7 @@
     event.preventDefault();
     const validation = validateForm(true);
     const location = getLocation();
-    if (!location.adminCode) {
+    if (!location.adminCode && !state.boundaryFile) {
       showToast("Chưa có mã ranh giới hành chính để phân tích.", "error");
       return;
     }
@@ -1209,6 +1286,7 @@
     initMap();
     updateSystemMode();
     $("#monitor-form").addEventListener("submit", handleSubmit);
+    $("#boundary-file").addEventListener("change", handleBoundaryFile);
     $("#download-map").addEventListener("click", downloadGeoJSON);
     $("#download-image").addEventListener("click", downloadImage);
     $("#download-csv").addEventListener("click", downloadCSV);
