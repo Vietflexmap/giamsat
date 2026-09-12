@@ -1,5 +1,6 @@
 fastapi==0.115.12
 geopandas==1.0.1
+matplotlib==3.10.1
 numpy==2.2.4
 planetary-computer==1.0.0
 pillow==11.2.1
