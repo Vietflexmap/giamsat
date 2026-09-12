@@ -1,0 +1,36 @@
+name: Test open imagery clip backend
+
+on:
+  push:
+    paths:
+      - "backend/**"
+      - "tests/**"
+      - ".github/workflows/backend-test.yml"
+  pull_request:
+    paths:
+      - "backend/**"
+      - "tests/**"
+      - ".github/workflows/backend-test.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - name: Install backend and test dependencies
+        run: python -m pip install -r backend/requirements-dev.txt
+      - name: Run focused clip tests
+        run: python -m pytest -q tests
+      - name: Lint backend and tests
+        run: python -m ruff check backend tests
