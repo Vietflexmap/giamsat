@@ -15,6 +15,7 @@
     demoMode: true,
     monitorPath: "/api/v1/monitor/jobs",
     clipPath: "/api/v1/clip/jobs",
+    elevationPath: "/api/v1/elevation/jobs",
     adminDataUrl: "https://raw.githubusercontent.com/Vietflexmap/sapnhap/908cbf40d3dab31bf4deb16bc49dba17cd88bafb/data/admin.json",
     boundaryHtmlUrls: [
       "https://cdn.jsdelivr.net/gh/Vietflexmap/anhmap@e80f4ee9f1e167817e4a9af8402c0bca4052573e/index.html"
@@ -53,6 +54,7 @@
     unitByBoundaryId: new Map(),
     boundaryLayer: null,
     resultLayer: null,
+    rasterLayer: null,
     gridLayer: null,
     baseLayer: null,
     baseLayers: {},
@@ -60,6 +62,7 @@
     resultCollection: null,
     lastParams: null,
     activeBase: "roadmap",
+    rasterVisible: true,
     panelOpen: window.innerWidth > 700,
     job: null
   };
@@ -330,6 +333,37 @@
     });
   }
 
+  function isDemMode() { return $("#product-mode")?.value === "dem"; }
+
+  function syncProductMode() {
+    const dem = isDemMode();
+    const monitorOptions = $("#monitor-source-options");
+    const demOptions = $("#dem-options");
+    const timeFieldset = $("#time-fieldset");
+    const areaFieldset = $("#area-fieldset");
+    if (monitorOptions) monitorOptions.hidden = dem;
+    if (demOptions) demOptions.hidden = !dem;
+    if (timeFieldset) timeFieldset.hidden = dem;
+    if (areaFieldset) areaFieldset.hidden = dem;
+    const hint = $("#product-hint");
+    if (hint) hint.textContent = dem
+      ? "Cắt DEM/DSM mở theo đúng polygon AOI, rồi xuất hillshade, slope, contour và bản đồ PNG/PDF."
+      : "So sánh Sentinel‑2/Landsat 9 giữa hai khoảng thời gian.";
+    const note = $(".form-note");
+    if (note) note.lastChild.textContent = dem
+      ? " DEM mở dùng nguồn 30 m và ranh giới chính xác; hãy tải ZIP Shapefile nếu máy chủ chưa cấu hình dataset admin."
+      : " Có thể dùng mã xã đã chọn hoặc nạp một tệp ranh giới. Khi có tệp, hệ thống ưu tiên cắt ảnh mở theo hình học trong tệp.";
+    const monitorLegend = $("#legend-monitor");
+    const demLegend = $("#legend-dem");
+    if (monitorLegend) monitorLegend.hidden = dem;
+    if (demLegend) demLegend.hidden = !dem;
+    if (dem) {
+      ["date-dk-error", "date-ck-error", "date-overlap-error", "area-error"].forEach(id => setError(id, "", []));
+      ["start_dk", "end_dk", "start_ck", "end_ck", "min_area", "max_area"].forEach(id => $("#" + id)?.classList.remove("input-error"));
+    }
+    updateSystemMode();
+  }
+
   function validateForm(showErrors = true) {
     const fields = {
       startDK: $("#start_dk").value,
@@ -348,32 +382,37 @@
     let ckError = "";
     let overlapError = "";
     let areaError = "";
-    if (!dates.startDK || !dates.endDK || (dates.startDK && dates.startDK >= today) || (dates.endDK && dates.endDK > today)) {
-      dkError = "Nhập đúng ngày đầu kỳ và không vượt quá hôm nay.";
-      valid = false;
-    } else if (dates.startDK >= dates.endDK) {
-      dkError = "Ngày bắt đầu phải trước ngày kết thúc.";
-      valid = false;
-    }
-    if (!dates.startCK || !dates.endCK || (dates.startCK && dates.startCK >= today) || (dates.endCK && dates.endCK > today)) {
-      ckError = "Nhập đúng ngày cuối kỳ và không vượt quá hôm nay.";
-      valid = false;
-    } else if (dates.startCK >= dates.endCK) {
-      ckError = "Ngày bắt đầu phải trước ngày kết thúc.";
-      valid = false;
-    }
-    if (dates.endDK && dates.startCK && dates.endDK >= dates.startCK) {
-      overlapError = "Ngày kết thúc đầu kỳ phải trước ngày bắt đầu cuối kỳ.";
-      valid = false;
-    }
-    const minArea = fields.minArea === "" ? null : Number(fields.minArea);
-    const maxArea = fields.maxArea === "" ? null : Number(fields.maxArea);
-    if ((minArea !== null && (!Number.isFinite(minArea) || minArea < 0)) || (maxArea !== null && (!Number.isFinite(maxArea) || maxArea < 0))) {
-      areaError = "Diện tích không được âm hoặc không hợp lệ.";
-      valid = false;
-    } else if (minArea !== null && maxArea !== null && minArea >= maxArea) {
-      areaError = "Diện tích nhỏ nhất phải nhỏ hơn lớn nhất.";
-      valid = false;
+    let minArea = fields.minArea === "" ? null : Number(fields.minArea);
+    let maxArea = fields.maxArea === "" ? null : Number(fields.maxArea);
+    if (!isDemMode()) {
+      if (!dates.startDK || !dates.endDK || (dates.startDK && dates.startDK >= today) || (dates.endDK && dates.endDK > today)) {
+        dkError = "Nhập đúng ngày đầu kỳ và không vượt quá hôm nay.";
+        valid = false;
+      } else if (dates.startDK >= dates.endDK) {
+        dkError = "Ngày bắt đầu phải trước ngày kết thúc.";
+        valid = false;
+      }
+      if (!dates.startCK || !dates.endCK || (dates.startCK && dates.startCK >= today) || (dates.endCK && dates.endCK > today)) {
+        ckError = "Nhập đúng ngày cuối kỳ và không vượt quá hôm nay.";
+        valid = false;
+      } else if (dates.startCK >= dates.endCK) {
+        ckError = "Ngày bắt đầu phải trước ngày kết thúc.";
+        valid = false;
+      }
+      if (dates.endDK && dates.startCK && dates.endDK >= dates.startCK) {
+        overlapError = "Ngày kết thúc đầu kỳ phải trước ngày bắt đầu cuối kỳ.";
+        valid = false;
+      }
+      if ((minArea !== null && (!Number.isFinite(minArea) || minArea < 0)) || (maxArea !== null && (!Number.isFinite(maxArea) || maxArea < 0))) {
+        areaError = "Diện tích không được âm hoặc không hợp lệ.";
+        valid = false;
+      } else if (minArea !== null && maxArea !== null && minArea >= maxArea) {
+        areaError = "Diện tích nhỏ nhất phải nhỏ hơn lớn nhất.";
+        valid = false;
+      }
+    } else {
+      minArea = 0;
+      maxArea = null;
     }
     if (showErrors) {
       setError("date-dk-error", dkError, ["start_dk", "end_dk"]);
@@ -389,7 +428,11 @@
     const values = validateForm(true);
     const satellite = $("#satellite");
     const monitorType = $("#monitor_type");
+    const productMode = $("#product-mode")?.value || "monitor";
+    const demSource = $("#dem-source");
+    const demSurface = $("#dem-surface");
     return Object.assign({}, location, {
+      productMode,
       satellite: satellite.value,
       satelliteLabel: satellite.options[satellite.selectedIndex]?.text || "Sentinel 2",
       monitorType: monitorType.value,
@@ -401,7 +444,12 @@
       minArea: values.minArea == null ? 0 : values.minArea,
       maxArea: values.maxArea,
       minAreaLabel: values.minArea == null ? "0" : String(values.minArea),
-      maxAreaLabel: values.maxArea == null ? "Không giới hạn" : String(values.maxArea)
+      maxAreaLabel: values.maxArea == null ? "Không giới hạn" : String(values.maxArea),
+      demSource: demSource?.value || "cop-dem-glo30",
+      demSourceLabel: demSource?.options[demSource.selectedIndex]?.text || "Copernicus DEM GLO-30",
+      demSurface: demSurface?.value || "dsm",
+      contourInterval: Number($("#contour-interval")?.value || 10),
+      demProducts: $$('input[name="dem-product"]:checked').map(input => input.value)
     });
   }
 
@@ -625,17 +673,22 @@
       const match = state.boundaryForUnit.get(String(item.code));
       return match ? [match] : [];
     }
-    return state.boundaryByProvince.get(provinceName) || [];
+    const provinceRecords = state.boundaryByProvince.get(provinceName) || [];
+    const provinceOnly = provinceRecords.filter(record => String(record.level || record.properties?.level || "").toLowerCase() === "province");
+    return provinceOnly.length ? provinceOnly : provinceRecords;
   }
 
   function updateSelection() {
     const location = getLocation();
     const records = findBoundaryRecords(location);
     state.selectedBoundary = records;
-    if (state.boundaryLayer) state.boundaryLayer.setSelected(records.map(featureId));
+    const highlighted = state.selectedUnit
+      ? records
+      : records.filter(record => String(record.level || record.properties?.level || "").toLowerCase() === "province");
+    if (state.boundaryLayer) state.boundaryLayer.setSelected(highlighted.map(featureId));
     const item = state.selectedUnit || state.selectedProvince;
     if (records.length) {
-      setMapStatus(`Đã chọn ${location.adminName}. Ranh giới PMTiles sẵn sàng để clip ảnh.`, "");
+      setMapStatus(`Đã chọn ${location.adminName}. Ranh giới hiển thị rõ; clip thật dùng geometry backend hoặc tệp nạp lên.`, "");
     } else if (item) {
       setMapStatus(`Đã chọn ${location.adminName}; đang chờ khớp bản ghi ranh giới.`, "error");
     } else {
@@ -679,13 +732,13 @@
     const random = randomFrom(seed || 37);
     const center = selectionCenter();
     const features = [];
-    for (let index = 0; index < 12; index += 1) {
-      const angle = (Math.PI * 2 * index / 12) + random() * .35;
-      const radius = .008 + random() * (params.adminLevel === "commune" ? .035 : .22);
+    for (let index = 0; index < 8; index += 1) {
+      const angle = (Math.PI * 2 * index / 8) + random() * .35;
+      const radius = .003 + random() * (params.adminLevel === "commune" ? .018 : .12);
       const lat = center[0] + Math.sin(angle) * radius;
       const lon = center[1] + Math.cos(angle) * radius * 1.32;
-      const width = .004 + random() * .012;
-      const height = .003 + random() * .010;
+      const width = .002 + random() * .007;
+      const height = .0015 + random() * .006;
       const area = Math.max(.12, Number((.22 + random() * 5.8).toFixed(2)));
       const confidence = Math.round(76 + random() * 21);
       const shape = [
@@ -727,17 +780,17 @@
   function featureStyle(feature) {
     const increase = feature.properties?.monitor_type === "+" || feature.properties?.change_type === "increase";
     return {
-      color: increase ? "#0d8f80" : "#c75548",
-      weight: 1.2,
-      opacity: .95,
-      fillColor: increase ? "#31b9a5" : "#e77e6c",
-      fillOpacity: .52
+      color: increase ? "#087f73" : "#a84d47",
+      weight: 1,
+      opacity: .86,
+      fillColor: increase ? "#35b6a5" : "#df7669",
+      fillOpacity: .14
     };
   }
 
   function bindFeature(feature, layer) {
     layer.on({
-      mouseover: event => event.target.setStyle(Object.assign({}, featureStyle(feature), { weight: 2.6, fillOpacity: .72 })),
+      mouseover: event => event.target.setStyle(Object.assign({}, featureStyle(feature), { weight: 2, fillOpacity: .28 })),
       mouseout: event => state.resultLayer.resetStyle(event.target),
       click: event => {
         event.originalEvent?.stopPropagation();
@@ -819,7 +872,33 @@
     return normalizeCollection(collection, Object.assign({}, params, { clipMode: "file" }));
   }
 
+  async function calculateElevation(params) {
+    if (!CONFIG.apiBase || CONFIG.demoMode) {
+      throw new Error("Cắt DEM theo ranh giới cần backend elevation. Hãy cấu hình apiBase và demoMode:false.");
+    }
+    const body = new FormData();
+    if (params.boundaryFile) body.append("boundary_file", params.boundaryFile, params.boundaryFile.name);
+    if (params.adminCode) body.append("admin_code", params.adminCode);
+    body.append("admin_level", params.adminLevel || "commune");
+    body.append("province_code", params.provinceCode || "");
+    body.append("dem_source", params.demSource);
+    body.append("surface", params.demSurface);
+    body.append("products", (params.demProducts.length ? params.demProducts : ["dem", "preview"]).join(","));
+    body.append("contour_interval_m", String(params.contourInterval || 10));
+    body.append("output_crs", "auto");
+    const response = await fetch(apiUrl(CONFIG.elevationPath), {
+      method: "POST",
+      headers: { Accept: "application/json, application/geo+json" },
+      body
+    });
+    const payload = await readJSON(response);
+    const collection = payload.job_id ? await pollJob(payload, CONFIG.elevationPath) : payload;
+    state.job = payload.job_id ? payload : null;
+    return normalizeCollection(collection, params);
+  }
+
   async function calculate(params) {
+    if (params.productMode === "dem") return calculateElevation(params);
     if (params.boundaryFile) return calculateClipFile(params);
     if (!CONFIG.apiBase || CONFIG.demoMode) {
       await wait(420);
@@ -851,14 +930,42 @@
     return normalizeCollection(collection, params);
   }
 
+  function clearRasterLayer() {
+    if (state.rasterLayer && state.map) state.map.removeLayer(state.rasterLayer);
+    state.rasterLayer = null;
+  }
+
+  function renderRasterResult(metadata) {
+    clearRasterLayer();
+    const url = metadata.preview_url || metadata.image_url;
+    const bbox = metadata.image_bbox_wgs84;
+    if (!url || !Array.isArray(bbox) || bbox.length < 4) return;
+    const west = Number(bbox[0]);
+    const south = Number(bbox[1]);
+    const east = Number(bbox[2]);
+    const north = Number(bbox[3]);
+    if (![west, south, east, north].every(Number.isFinite) || west >= east || south >= north) return;
+    const imageUrl = new URL(url, CONFIG.apiBase || window.location.href).href;
+    const bounds = [[south, west], [north, east]];
+    const options = { opacity: metadata.operation === "elevation_clip" ? .78 : .62, interactive: false, crossOrigin: true, zIndex: 220 };
+    if (typeof V.ImageOverlay === "function") state.rasterLayer = new V.ImageOverlay(imageUrl, bounds, options);
+    else if (typeof V.imageOverlay === "function") state.rasterLayer = V.imageOverlay(imageUrl, bounds, options);
+    if (!state.rasterLayer) return;
+    if (state.rasterVisible) state.rasterLayer.addTo(state.map);
+    state.boundaryLayer?.bringToFront?.();
+    state.resultLayer?.bringToFront?.();
+  }
+
   function renderCollection(collection, params) {
     state.resultCollection = collection;
     state.lastParams = params;
+    clearRasterLayer();
     state.resultLayer.clearLayers();
-    state.resultLayer.addData(collection);
+    const metadata = collection.metadata || {};
+    const isElevation = metadata.operation === "elevation_clip";
+    if (!isElevation) state.resultLayer.addData(collection);
     updateStats(collection);
     $("#results-drawer").hidden = false;
-    const metadata = collection.metadata || {};
     const verified = metadata.clip_verified === true;
     const isClip = metadata.operation === "clip";
     $("#results-title").textContent = isClip
@@ -870,9 +977,36 @@
         ? `<span class="status-dot"></span> Kết quả đã được backend xác nhận clip theo AOI <code>${escapeHTML(metadata.admin_code || params.adminCode)}</code>. Ảnh tải xuống dùng cùng geometry.`
         : `<span class="status-dot amber"></span> Chế độ minh họa phía trình duyệt; chưa phải kết quả ảnh vệ tinh và chưa xác nhận clip hình học.`;
     $("#map-attribution").innerHTML = `${escapeHTML(params.satelliteLabel)} · Copernicus/USGS <span>•</span> Vietflex Map <span>•</span> AOI ${escapeHTML(params.adminCode)}`;
+    if (isElevation && verified) {
+      $("#results-title").textContent = "Đã cắt DEM theo ranh giới";
+      $("#results-disclaimer").innerHTML = "<span class=\"status-dot\"></span> DEM/DSM đã được mask chính xác theo AOI. <code>" +
+        escapeHTML(metadata.analysis_crs || "CRS phẳng") + "</code> · " +
+        escapeHTML(String(metadata.resolution_m || "—")) + " m · " +
+        escapeHTML(metadata.warning || "DSM không phải DTM.");
+      $("#map-attribution").innerHTML = escapeHTML(metadata.dem_source_label || params.demSourceLabel) +
+        " · STAC/COG <span>•</span> Vietflex Map <span>•</span> DSM " + escapeHTML(params.adminCode);
+    }
+    renderRasterResult(metadata);
   }
 
   function updateStats(collection) {
+    const metadata = collection.metadata || {};
+    if (metadata.operation === "elevation_clip") {
+      $$(".stat-label").forEach((label, index) => { label.textContent = ["Pixel hợp lệ", "Cao độ thấp nhất", "Cao độ cao nhất", "Độ phân giải"][index] || label.textContent; });
+      $$(".stat-unit").forEach((unit, index) => { unit.textContent = ["pixel", "m", "m", "m"][index] || unit.textContent; });
+      $("#stat-count").textContent = number(metadata.valid_pixel_count, 0)?.toLocaleString("vi-VN") || "—";
+      $("#stat-area").textContent = formatArea(metadata.dem_min_m, 1);
+      $("#stat-max").textContent = formatArea(metadata.dem_max_m, 1);
+      $("#stat-confidence").textContent = number(metadata.resolution_m, 0)?.toLocaleString("vi-VN") || "—";
+      $("#results-count-label").textContent = (number(metadata.valid_pixel_count, 0)?.toLocaleString("vi-VN") || "—") + " pixel hợp lệ";
+      $("#results-list").innerHTML = "<div class=\"empty-results\"><span>Cao độ " +
+        formatArea(metadata.dem_min_m, 1) + "–" + formatArea(metadata.dem_max_m, 1) + " m · " +
+        escapeHTML(metadata.dem_source_label || "DEM") + " · contour " +
+        escapeHTML(String(metadata.contour_interval_m || "—")) + " m.</span></div>";
+      return;
+    }
+    $$(".stat-label").forEach((label, index) => { label.textContent = ["Vùng phát hiện", "Tổng diện tích", "Lớn nhất", "Độ tin cậy TB"][index] || label.textContent; });
+    $$(".stat-unit").forEach((unit, index) => { unit.textContent = ["vùng", "ha", "ha", "%"][index] || unit.textContent; });
     const features = collection.features || [];
     const total = features.reduce((sum, feature) => sum + Number(feature.properties?.area_ha || 0), 0);
     const max = features.reduce((value, feature) => Math.max(value, Number(feature.properties?.area_ha || 0)), 0);
@@ -898,7 +1032,7 @@
       if (String(layer.feature?.properties?.id) === String(id)) {
         state.map.fitBounds(layer.getBounds(), { maxZoom: 14, padding: [100, 100], animate: true });
         layer.openPopup();
-        layer.setStyle(Object.assign({}, featureStyle(feature), { weight: 2.8, fillOpacity: .74 }));
+        layer.setStyle(Object.assign({}, featureStyle(feature), { weight: 2.2, fillOpacity: .32 }));
         window.setTimeout(() => state.resultLayer.resetStyle(layer), 1100);
       }
     });
@@ -917,6 +1051,12 @@
   function updateSystemMode() {
     const mode = $("#system-mode");
     if (!mode) return;
+    if (isDemMode()) {
+      mode.textContent = CONFIG.apiBase && !CONFIG.demoMode
+        ? "DEM/DSM · STAC/COG backend"
+        : "DEM UI · chờ backend elevation";
+      return;
+    }
     if (state.boundaryFile) {
       mode.textContent = CONFIG.apiBase && !CONFIG.demoMode
         ? "Cắt ảnh SHP · STAC/COG backend"
@@ -943,7 +1083,9 @@
     }
     const params = getParams();
     setLoading(true);
-    const steps = ["Đọc mã AOI hành chính…", "Kiểm tra khoảng thời gian…", `Đang phân tích ${params.satelliteLabel}…`, "Clip và tổng hợp vùng biến động…"];
+    const steps = params.productMode === "dem"
+      ? ["Đọc mã AOI hành chính…", "Kiểm tra DEM và CRS…", "Mosaic tile cao độ…", "Cắt DEM, tạo hillshade và bản đồ…"]
+      : ["Đọc mã AOI hành chính…", "Kiểm tra khoảng thời gian…", `Đang phân tích ${params.satelliteLabel}…`, "Clip và tổng hợp vùng biến động…"];
     try {
       for (let index = 0; index < steps.length - 1; index += 1) {
         $("#loading-step").textContent = steps[index];
@@ -952,7 +1094,11 @@
       $("#loading-step").textContent = steps[steps.length - 1];
       const collection = await calculate(params);
       renderCollection(collection, params);
-      showToast(collection.features.length ? `Đã phát hiện ${collection.features.length} vùng biến động.` : "Không có vùng nào phù hợp với bộ lọc.", collection.features.length ? "success" : "warning");
+      if (params.productMode === "dem") {
+        showToast("Đã cắt DEM theo ranh giới và tạo các lớp địa hình.", "success");
+      } else {
+        showToast(collection.features.length ? `Đã phát hiện ${collection.features.length} vùng biến động.` : "Không có vùng nào phù hợp với bộ lọc.", collection.features.length ? "success" : "warning");
+      }
     } catch (error) {
       showToast(error.message || "Không thể tính toán. Vui lòng thử lại.", "error");
     } finally {
@@ -982,7 +1128,9 @@
 
   function downloadImage() {
     const metadata = state.resultCollection?.metadata || {};
-    const url = metadata.geotiff_url || metadata.image_url || metadata.download_url;
+    const url = metadata.operation === "elevation_clip"
+      ? metadata.map_pdf_url || metadata.map_png_url || metadata.dem_url
+      : metadata.geotiff_url || metadata.image_url || metadata.download_url;
     if (!url) return showToast("API chưa trả về URL ảnh đã clip. Demo chỉ tải được GeoJSON/CSV.", "warning");
     const anchor = document.createElement("a");
     anchor.href = new URL(url, CONFIG.apiBase || window.location.href).href;
@@ -1172,7 +1320,10 @@
         minZoom: CONFIG.boundaryMinZoom,
         maxZoom: CONFIG.boundaryMaxZoom,
         minNativeZoom: CONFIG.boundaryMinZoom,
-        maxNativeZoom: CONFIG.boundaryNativeMaxZoom,
+        // The layer rasterizes the parent PMTiles geometry into every child
+        // canvas itself. Keeping Leaflet at the map zoom avoids CSS-upscaling
+        // a z9 canvas, which was the main source of soft boundary edges.
+        maxNativeZoom: CONFIG.boundaryMaxZoom,
         noWrap: true,
         updateWhenIdle: false,
         keepBuffer: 2,
@@ -1231,9 +1382,19 @@
 
     paint(context, features, { factor = 1, offsetX = 0, offsetY = 0 } = {}) {
       context.save();
-      context.lineJoin = "round";
-      context.lineCap = "round";
-      for (const feature of features) {
+      context.lineJoin = "miter";
+      context.lineCap = "butt";
+      context.imageSmoothingEnabled = true;
+      const ordered = features.slice().sort((left, right) => {
+        const leftProperties = left.properties || {};
+        const rightProperties = right.properties || {};
+        const leftProvince = leftProperties.level === "province" ? 0 : 1;
+        const rightProvince = rightProperties.level === "province" ? 0 : 1;
+        const leftSelected = this.selectedIds.has(String(leftProperties.id ?? "")) ? 1 : 0;
+        const rightSelected = this.selectedIds.has(String(rightProperties.id ?? "")) ? 1 : 0;
+        return leftProvince - rightProvince || leftSelected - rightSelected;
+      });
+      for (const feature of ordered) {
         const properties = feature.properties || {};
         const id = String(properties.id ?? "");
         const selected = this.selectedIds.has(id);
@@ -1248,12 +1409,29 @@
           context.closePath();
         }
         const province = properties.level === "province";
-        context.fillStyle = selected ? "rgba(255, 220, 80, .34)" : province ? "rgba(190, 35, 51, .025)" : "rgba(140, 38, 53, .025)";
-        context.fill("evenodd");
-        context.strokeStyle = selected ? "#d71920" : province ? "#641622" : "#8c2635";
-        context.setLineDash(selected ? [] : province ? [9, 5] : [5, 4]);
-        context.lineWidth = selected ? 2.4 : province ? 1.65 : 1.05;
-        context.globalAlpha = selected ? 1 : .9;
+        context.globalCompositeOperation = "source-over";
+        context.setLineDash([]);
+        context.globalAlpha = selected ? 1 : province ? .88 : .64;
+        if (selected) {
+          context.strokeStyle = "rgba(255,255,255,.94)";
+          context.lineWidth = 3.3;
+          context.stroke();
+          context.beginPath();
+          for (const ring of feature.geometry || []) {
+            if (!ring.length) continue;
+            ring.forEach((point, index) => {
+              const x = (point.x / feature.extent * 256 - offsetX) * factor;
+              const y = (point.y / feature.extent * 256 - offsetY) * factor;
+              index ? context.lineTo(x, y) : context.moveTo(x, y);
+            });
+            context.closePath();
+          }
+          context.strokeStyle = "#9d3047";
+          context.lineWidth = 1.45;
+        } else {
+          context.strokeStyle = province ? "#405566" : "#728391";
+          context.lineWidth = province ? 1.2 : .72;
+        }
         context.stroke();
         context.globalAlpha = 1;
       }
@@ -1284,8 +1462,14 @@
   function setupUI() {
     initializeDates();
     initMap();
+    syncProductMode();
     updateSystemMode();
     $("#monitor-form").addEventListener("submit", handleSubmit);
+    $("#product-mode").addEventListener("change", () => {
+      syncProductMode();
+      validateForm(true);
+      updateContext();
+    });
     $("#boundary-file").addEventListener("change", handleBoundaryFile);
     $("#download-map").addEventListener("click", downloadGeoJSON);
     $("#download-image").addEventListener("click", downloadImage);
@@ -1293,6 +1477,12 @@
     $("#close-results").addEventListener("click", () => { $("#results-drawer").hidden = true; });
     $("#toggle-layers").addEventListener("click", toggleLayers);
     $("#layer-results").addEventListener("change", event => { if (event.target.checked) state.resultLayer.addTo(state.map); else state.map.removeLayer(state.resultLayer); });
+    $("#layer-raster").addEventListener("change", event => {
+      state.rasterVisible = event.target.checked;
+      if (!state.rasterLayer) return;
+      if (state.rasterVisible) state.rasterLayer.addTo(state.map);
+      else state.map.removeLayer(state.rasterLayer);
+    });
     $("#layer-boundary").addEventListener("change", event => { if (event.target.checked && state.boundaryLayer) state.boundaryLayer.addTo(state.map); else if (state.boundaryLayer) state.map.removeLayer(state.boundaryLayer); });
     $("#layer-grid").addEventListener("change", event => { if (event.target.checked) state.gridLayer.addTo(state.map); else state.map.removeLayer(state.gridLayer); });
     $$('[data-basemap]').forEach(button => button.addEventListener("click", () => setBaseMap(button.dataset.basemap)));
