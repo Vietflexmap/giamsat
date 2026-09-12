@@ -1,4 +1,4 @@
-"""FastAPI service for open imagery clipping and optional change monitoring.
+"""FastAPI service for open imagery, DEM clipping and change monitoring.
 
 The service is intentionally small enough to deploy on Cloud Run, while making
 the important spatial invariants explicit:
@@ -6,6 +6,8 @@ the important spatial invariants explicit:
 * the primary clip route accepts a complete boundary file and validates it;
 * imagery is read from open STAC COG assets and masked with the dissolved AOI;
 * GeoJSON is WGS84, while reported hectares use an equal-area projection;
+* the DEM route resolves a code-keyed boundary, mosaics open DEM COGs and
+  applies an exact polygon mask before derivatives are written;
 * the legacy Earth Engine monitor route is optional and keeps credentials server-side.
 
 For a multi-instance production deployment, replace the in-memory job store
@@ -36,6 +38,20 @@ try:
     from .clip_pipeline import ClipParameters, run_clip_pipeline, validate_clip_parameters
 except ImportError:  # Supports `uvicorn app:app` when the backend directory is cwd.
     from clip_pipeline import ClipParameters, run_clip_pipeline, validate_clip_parameters
+try:
+    from .elevation_pipeline import (
+        ElevationParameters,
+        resolve_admin_boundary_path,
+        run_elevation_pipeline,
+        validate_elevation_parameters,
+    )
+except ImportError:  # Supports `uvicorn app:app` when the backend directory is cwd.
+    from elevation_pipeline import (  # type: ignore[no-redef]
+        ElevationParameters,
+        resolve_admin_boundary_path,
+        run_elevation_pipeline,
+        validate_elevation_parameters,
+    )
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -144,9 +160,28 @@ class ClipJob:
     error: str | None = None
 
 
+@dataclass
+class ElevationJob:
+    """A file-backed DEM/DSM clipping job."""
+
+    job_id: str
+    boundary_path: Path | None
+    boundary_filename: str
+    admin_code: str | None
+    output_dir: Path
+    parameters: ElevationParameters
+    status: str = "queued"
+    message: str = "Đã xếp hàng"
+    created_at: str = field(default_factory=utc_now)
+    updated_at: str = field(default_factory=utc_now)
+    result: dict[str, Any] | None = None
+    error: str | None = None
+
+
 JOBS: dict[str, Job] = {}
 FINGERPRINTS: dict[str, str] = {}
 CLIP_JOBS: dict[str, ClipJob] = {}
+ELEVATION_JOBS: dict[str, ElevationJob] = {}
 JOB_LOCK = threading.Lock()
 EXECUTOR = ThreadPoolExecutor(max_workers=env_int("JOB_WORKERS", 2), thread_name_prefix="ee-job")
 EE_LOCK = threading.Lock()
@@ -188,6 +223,16 @@ def update_clip_job(job_id: str, **changes: Any) -> None:
         job.updated_at = utc_now()
 
 
+def update_elevation_job(job_id: str, **changes: Any) -> None:
+    """Update a DEM job atomically for the polling API."""
+
+    with JOB_LOCK:
+        job = ELEVATION_JOBS[job_id]
+        for key, value in changes.items():
+            setattr(job, key, value)
+        job.updated_at = utc_now()
+
+
 def fingerprint(request: MonitorRequest) -> str:
     canonical = json.dumps(request.model_dump(mode="json"), ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -221,6 +266,21 @@ def prune_clip_jobs_locked() -> None:
             continue
         if updated < cutoff and job.status in {"completed", "failed"}:
             CLIP_JOBS.pop(job_id, None)
+            shutil.rmtree(job.output_dir, ignore_errors=True)
+
+
+def prune_elevation_jobs_locked() -> None:
+    """Remove completed DEM artifacts after the configured retention time."""
+
+    ttl_seconds = env_int("JOB_TTL_SECONDS", 3600)
+    cutoff = datetime.now(timezone.utc).timestamp() - max(ttl_seconds, 60)
+    for job_id, job in list(ELEVATION_JOBS.items()):
+        try:
+            updated = datetime.fromisoformat(job.updated_at).timestamp()
+        except ValueError:
+            continue
+        if updated < cutoff and job.status in {"completed", "failed"}:
+            ELEVATION_JOBS.pop(job_id, None)
             shutil.rmtree(job.output_dir, ignore_errors=True)
 
 
@@ -489,6 +549,25 @@ def clip_job_status(job: ClipJob) -> dict[str, Any]:
     return payload
 
 
+def elevation_job_status(job: ElevationJob) -> dict[str, Any]:
+    """Serialize an open DEM/DSM job for the frontend poller."""
+
+    payload: dict[str, Any] = {
+        "job_id": job.job_id,
+        "status": job.status,
+        "message": job.message,
+        "created_at": job.created_at,
+        "updated_at": job.updated_at,
+        "status_url": f"/api/v1/elevation/jobs/{job.job_id}",
+    }
+    if job.status == "completed":
+        payload["result_url"] = f"/api/v1/elevation/jobs/{job.job_id}/results.geojson"
+        payload["metadata"] = job.result.get("metadata", {}) if job.result else {}
+    if job.status == "failed":
+        payload["error"] = job.error or "DEM job thất bại."
+    return payload
+
+
 async def persist_upload(upload: UploadFile, destination: Path) -> int:
     """Stream an uploaded boundary to disk without exceeding the size cap."""
 
@@ -527,6 +606,35 @@ def run_clip_job(job_id: str) -> None:
         update_clip_job(job_id, status="failed", message="Clip job thất bại.", error=str(error))
     finally:
         job.boundary_path.unlink(missing_ok=True)
+
+
+def run_elevation_job(job_id: str) -> None:
+    """Execute a DEM/DSM clip and remove an uploaded source after processing."""
+
+    job = ELEVATION_JOBS[job_id]
+    update_elevation_job(job_id, status="running", message="Đang resolve AOI và kiểm tra nguồn DEM…")
+    try:
+        boundary_path = job.boundary_path
+        boundary_filename = job.boundary_filename
+        if boundary_path is None:
+            update_elevation_job(job_id, message="Đang lấy geometry chính xác theo admin_code…")
+            boundary_path, configured_name = resolve_admin_boundary_path(job.admin_code or "", job.output_dir)
+            boundary_filename = f"{configured_name} · {job.admin_code}"
+        update_elevation_job(job_id, message="Đang mosaic, reprojection và mask DEM theo AOI…")
+        result = run_elevation_pipeline(
+            boundary_upload=boundary_path,
+            boundary_filename=boundary_filename,
+            parameters=job.parameters,
+            output_dir=job.output_dir,
+            public_prefix=f"/api/v1/files/{job.job_id}",
+        )
+        update_elevation_job(job_id, status="completed", message="Đã cắt DEM và kiểm tra mask theo ranh giới.", result=result)
+    except Exception as error:  # Do not expose secrets or local paths in the API.
+        LOGGER.exception("Elevation job %s failed", job_id)
+        update_elevation_job(job_id, status="failed", message="DEM job thất bại.", error=str(error))
+    finally:
+        if job.boundary_path is not None:
+            job.boundary_path.unlink(missing_ok=True)
 
 
 @app.post("/api/v1/clip/jobs", status_code=202)
@@ -598,6 +706,114 @@ def get_clip_result(job_id: str) -> JSONResponse:
         raise HTTPException(status_code=404, detail="Không tìm thấy clip job.")
     if job.status != "completed" or not job.result:
         raise HTTPException(status_code=409, detail=f"Clip job chưa hoàn tất: {job.status}.")
+    return JSONResponse(content=job.result, media_type="application/geo+json")
+
+
+@app.post("/api/v1/elevation/jobs", status_code=202)
+async def create_elevation_job(
+    boundary_file: UploadFile | None = File(default=None),
+    admin_code: str | None = Form(default=None),
+    admin_level: Literal["province", "commune"] = Form(default="commune"),
+    province_code: str | None = Form(default=None),
+    dem_source: str = Form(default="cop-dem-glo30"),
+    surface: str = Form(default="dsm"),
+    products: str = Form(default="dem,hillshade,slope,contours,map,preview,geojson"),
+    contour_interval_m: float = Form(default=10.0),
+    output_crs: str = Form(default="auto"),
+    resolution_m: float | None = Form(default=None),
+) -> dict[str, Any]:
+    """Queue a boundary-clipped open DEM/DSM job.
+
+    A file upload is authoritative for the request.  Without a file the
+    server must have ``ADMIN_BOUNDARIES_PATH`` configured and resolves exactly
+    one feature by ``admin_code``; names and centroids are never used for clip.
+    """
+
+    if boundary_file is None and not str(admin_code or "").strip():
+        raise HTTPException(status_code=400, detail="Gửi boundary_file hoặc admin_code để xác định AOI.")
+    if admin_code is not None and (not 1 <= len(str(admin_code).strip()) <= 32):
+        raise HTTPException(status_code=422, detail="admin_code phải có từ 1 đến 32 ký tự.")
+    try:
+        parameters = validate_elevation_parameters(
+            dem_source,
+            surface,
+            products,
+            contour_interval_m,
+            output_crs,
+            resolution_m,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    job_id = uuid.uuid4().hex
+    output_dir = OUTPUT_ROOT / job_id
+    output_dir.mkdir(parents=True, exist_ok=False)
+    boundary_path: Path | None = None
+    boundary_filename = f"admin:{str(admin_code).strip()}" if admin_code else "boundary"
+    size = 0
+    try:
+        if boundary_file is not None:
+            filename = Path(boundary_file.filename or "boundary.zip").name
+            if not filename or filename in {".", ".."}:
+                raise HTTPException(status_code=400, detail="Tên tệp ranh giới không hợp lệ.")
+            boundary_filename = filename
+            boundary_path = output_dir / f"upload{Path(filename).suffix.lower()}"
+            size = await persist_upload(boundary_file, boundary_path)
+    except HTTPException:
+        shutil.rmtree(output_dir, ignore_errors=True)
+        raise
+    except Exception as error:
+        shutil.rmtree(output_dir, ignore_errors=True)
+        raise HTTPException(status_code=400, detail=f"Không lưu được tệp ranh giới: {error}") from error
+    finally:
+        if boundary_file is not None:
+            await boundary_file.close()
+
+    job = ElevationJob(
+        job_id=job_id,
+        boundary_path=boundary_path,
+        boundary_filename=boundary_filename,
+        admin_code=str(admin_code).strip() if admin_code else None,
+        output_dir=output_dir,
+        parameters=parameters,
+    )
+    with JOB_LOCK:
+        prune_elevation_jobs_locked()
+        ELEVATION_JOBS[job_id] = job
+    LOGGER.info(
+        "Queued elevation job %s: boundary=%s bytes=%s source=%s products=%s admin=%s level=%s province=%s",
+        job_id,
+        boundary_filename,
+        size,
+        parameters.dem_source,
+        ",".join(sorted(parameters.products)),
+        admin_code,
+        admin_level,
+        province_code,
+    )
+    EXECUTOR.submit(run_elevation_job, job_id)
+    return elevation_job_status(job)
+
+
+@app.get("/api/v1/elevation/jobs/{job_id}")
+def get_elevation_job(job_id: str) -> dict[str, Any]:
+    """Return DEM/DSM job state for frontend polling."""
+
+    job = ELEVATION_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Không tìm thấy elevation job.")
+    return elevation_job_status(job)
+
+
+@app.get("/api/v1/elevation/jobs/{job_id}/results.geojson")
+def get_elevation_result(job_id: str) -> JSONResponse:
+    """Return DEM metadata and the audit AOI GeoJSON envelope."""
+
+    job = ELEVATION_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Không tìm thấy elevation job.")
+    if job.status != "completed" or not job.result:
+        raise HTTPException(status_code=409, detail=f"Elevation job chưa hoàn tất: {job.status}.")
     return JSONResponse(content=job.result, media_type="application/geo+json")
 
 
