@@ -13,5 +13,7 @@ RUN apt-get update \
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app.py clip_pipeline.py ./
+COPY elevation_pipeline.py ./
+ENV MPLBACKEND=Agg
 
 CMD exec uvicorn app:app --host 0.0.0.0 --port ${PORT}
