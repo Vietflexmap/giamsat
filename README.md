@@ -89,3 +89,7 @@ Source gốc sử dụng Alpine.js, HTMX, Choice.js và Flatpickr; form gọi c�
 Nền sáng/tối dùng OpenStreetMap/CARTO; nền ảnh vệ tinh dùng Esri World Imagery. Hãy giữ attribution và kiểm tra điều khoản dịch vụ trước khi triển khai thương mại.
 
 Thiết kế: **Long Ngo · Vietflex Map**.
+
+## Bật GitHub Pages
+
+Workflow triển khai được đặt tại `.github/workflows/pages.yml` và đang để chế độ chạy thủ công để tránh lỗi khi Pages chưa được bật. Vào `Settings → Pages`, chọn `Source: GitHub Actions`, sau đó vào tab `Actions` và chạy `Deploy Vietflex Map WebGIS`. Những lần cập nhật sau có thể đổi trigger sang `push` trên nhánh `main` nếu muốn tự động triển khai.
