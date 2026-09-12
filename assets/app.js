@@ -113,6 +113,19 @@
     "91": [9.8240, 105.1259], "96": [9.1769, 105.1520]
   };
 
+  const DISTRICT_CENTERS = {
+    "1-1": [21.033, 105.819], "1-2": [21.028, 105.851], "1-3": [21.064, 105.810],
+    "1-4": [21.047, 105.893], "1-5": [21.036, 105.793], "1-6": [21.017, 105.831],
+    "1-7": [21.005, 105.850], "1-8": [20.980, 105.860], "1-9": [20.998, 105.815],
+    "1-16": [21.260, 105.850], "1-17": [21.140, 105.846], "1-18": [21.013, 105.943],
+    "1-19": [21.021, 105.765], "1-20": [20.940, 105.850], "1-21": [21.070, 105.770],
+    "1-250": [21.185, 105.715], "1-268": [20.973, 105.780], "1-269": [21.140, 105.506],
+    "1-271": [21.198, 105.424], "1-272": [21.110, 105.550], "1-273": [21.090, 105.670],
+    "1-274": [21.020, 105.710], "1-275": [20.990, 105.650], "1-276": [21.030, 105.590],
+    "1-277": [20.900, 105.680], "1-278": [20.860, 105.770], "1-279": [20.840, 105.860],
+    "1-280": [20.730, 105.910], "1-281": [20.720, 105.770], "1-282": [20.670, 105.690]
+  };
+
   const DEFAULT_VIEW = { center: [21.0285, 105.8542], zoom: 10 };
   const HANOI_BOUNDS = [[20.72, 105.38], [21.45, 106.05]];
   const HANOI_BOUNDARY = {
@@ -199,6 +212,7 @@
       setOptions(district, items, "-- Quận/Huyện/Thị Xã --");
       setOptions(commune, [], "-- Xã/Phường/Thị Trấn --");
       updateContext();
+      updateBoundary();
       zoomToProvince(province.value);
     });
 
@@ -206,11 +220,13 @@
       const items = COMMUNES[`${province.value}-${district.value}`] || [];
       setOptions(commune, items, "-- Xã/Phường/Thị Trấn --");
       updateContext();
+      updateBoundary();
       zoomToSelection();
     });
 
     commune.addEventListener("change", () => {
       updateContext();
+      updateBoundary();
       zoomToSelection();
     });
   }
@@ -391,6 +407,35 @@
     return DEFAULT_VIEW.center;
   }
 
+  function getSelectionCenter(params) {
+    const districtKey = `${params.provinceCode || ""}-${params.districtCode || ""}`;
+    return DISTRICT_CENTERS[districtKey] || getCenter(params);
+  }
+
+  function updateBoundary(params = getLocationLabels()) {
+    if (!state.boundaryLayer) return;
+    const center = getSelectionCenter(params);
+    if (params.provinceCode === "1" && !params.districtCode) {
+      state.boundaryLayer.clearLayers();
+      state.boundaryLayer.addData(HANOI_BOUNDARY);
+      return;
+    }
+    const latitudeSpan = params.communeCode ? .035 : params.districtCode ? .075 : .22;
+    const longitudeSpan = params.communeCode ? .045 : params.districtCode ? .095 : .28;
+    const [latitude, longitude] = center;
+    const feature = {
+      type: "Feature",
+      properties: { name: params.communeLabel || params.districtLabel || params.provinceLabel || "Khu vực phân tích" },
+      geometry: { type: "Polygon", coordinates: [[
+        [longitude - longitudeSpan, latitude - latitudeSpan], [longitude - longitudeSpan * .72, latitude + latitudeSpan],
+        [longitude + longitudeSpan, latitude + latitudeSpan * .82], [longitude + longitudeSpan * .85, latitude - latitudeSpan],
+        [longitude - longitudeSpan, latitude - latitudeSpan]
+      ]] }
+    };
+    state.boundaryLayer.clearLayers();
+    state.boundaryLayer.addData(feature);
+  }
+
   function zoomToProvince(provinceCode) {
     if (!state.map) return;
     if (provinceCode === "1") state.map.fitBounds(HANOI_BOUNDS, { padding: [28, 28], animate: true });
@@ -400,7 +445,7 @@
   function zoomToSelection() {
     if (!state.map) return;
     const labels = getLocationLabels();
-    const center = getCenter(labels);
+    const center = getSelectionCenter(labels);
     const offset = labels.districtCode ? 0.04 : 0;
     state.map.setView([center[0] + offset, center[1] + offset], labels.communeCode ? 13 : labels.districtCode ? 11 : 10, { animate: true });
   }
@@ -426,7 +471,7 @@
   function buildDemoCollection(params) {
     const seed = hashString([params.provinceCode, params.districtCode, params.communeCode, params.startDK, params.endCK, params.monitorType, params.satellite].join("|"));
     const random = randomFrom(seed || 37);
-    const center = getCenter(params);
+    const center = getSelectionCenter(params);
     const featureCount = 14;
     const features = [];
     for (let index = 0; index < featureCount; index += 1) {
@@ -507,6 +552,7 @@
     state.lastParams = params;
     state.resultLayer.clearLayers();
     state.resultLayer.addData(collection);
+    updateBoundary(params);
     if (collection.features.length) {
       const bounds = state.resultLayer.getBounds();
       if (bounds.isValid()) state.map.fitBounds(bounds, { padding: [80, 80], maxZoom: 12, animate: true });
