@@ -1,41 +1,120 @@
-# Backend clip AOI
+# Backend cắt ảnh theo ranh giới
 
-`app.py` là service tham chiếu FastAPI cho Cloud Run hoặc máy chủ Python có HTTPS.
+Backend ưu tiên mã nguồn mở cho WebGIS Vietflex: nhận ZIP Shapefile hoặc
+GeoJSON, kiểm tra hình học/CRS, tìm cảnh ảnh mở qua STAC, rồi cắt server-side
+bằng Rasterio. Earth Engine chỉ còn là phần tùy chọn cho route giám sát biến
+động cũ.
 
-## Chuẩn bị Earth Engine asset
-
-Tạo một `ee.FeatureCollection` cấp quyền truy cập cho runtime, gồm một feature cho mỗi mã ĐVHC trong snapshot giao diện:
+## Luồng cắt ảnh
 
 ```text
-code: string, unique
-level: "province" | "commune"
-name: string
-province_code: string
+ZIP (.shp + .shx + .dbf + .prj)
+  → giải nén an toàn
+  → đọc CRS + make_valid + dissolve
+  → STAC search Sentinel-2 L2A / Landsat 9 C2 L2
+  → đọc COG qua HTTP range
+  → rasterio.mask.mask(AOI, crop=True)
+  → masked GeoTIFF/COG + RGBA PNG + AOI GeoJSON
 ```
 
-`EE_ADMIN_CODE_FIELD` phải trỏ vào trường `code`. Không lấy geometry do browser gửi lên làm nguồn sự thật. Nếu cần đưa bộ địa giới vào Earth Engine, hãy dùng quy trình ETL có kiểm tra số dòng, mã trùng, hình học hợp lệ, CRS và phiên bản nguồn trước khi upload.
+API chính:
 
-## Credentials
+```text
+POST /api/v1/clip/jobs                 multipart/form-data
+GET  /api/v1/clip/jobs/{job_id}
+GET  /api/v1/clip/jobs/{job_id}/results.geojson
+GET  /api/v1/files/{job_id}/clip.tif
+GET  /api/v1/files/{job_id}/clip.png
+```
 
-Local development dùng `gcloud auth application-default login` hoặc service account được mount ngoài repository. Cloud Run nên dùng Workload Identity/service account gắn với Earth Engine project. Không đặt private key trong `.env`, log hoặc phản hồi API.
+Ví dụ trường multipart:
 
-## Chạy
+```text
+boundary_file = ranh_gioi.zip
+satellite     = s2                 # s2 | landsat9
+start_date    = 12/06/2026
+end_date      = 12/09/2026
+cloud_max     = 80
+output        = geotiff,png,geojson
+render_mode   = true_color
+```
+
+## Shapefile đầu vào
+
+Không tải `.shp` đơn lẻ. Một Shapefile đầy đủ tối thiểu phải có các file cùng
+tên:
+
+```text
+ranh_gioi.shp
+ranh_gioi.shx
+ranh_gioi.dbf
+ranh_gioi.prj
+```
+
+Backend từ chối archive có đường dẫn nguy hiểm, nhiều lớp `.shp`, thiếu `.prj`,
+CRS không xác định, hình học rỗng hoặc hình học không phải Polygon/
+MultiPolygon. Hình học lỗi được sửa bằng `shapely.make_valid`, sau đó dissolve
+thành một AOI. Diện tích được tính trong `EPSG:6933`; tọa độ ảnh/GeoJSON giữ
+theo CRS nguồn raster hoặc WGS84 tương ứng.
+
+## Ảnh mở và STAC
+
+Mặc định dùng Microsoft Planetary Computer STAC:
+
+- Sentinel-2 L2A: collection `sentinel-2-l2a`, band B04/B03/B02.
+- Landsat 9 Collection 2 Level-2: collection `landsat-c2-l2`, lọc
+  `platform=landsat-9`, band red/green/blue.
+- Chọn cảnh giao AOI có mây dưới `cloud_max`, ưu tiên cảnh ít mây nhất.
+- Asset COG được đọc theo HTTP range; Planetary Computer được ký URL tự động
+  khi `STAC_SIGN_ASSETS=true`.
+
+Đây là chế độ cắt ảnh một cảnh ít mây, không phải composite thay đổi đa thời
+gian. Route `/api/v1/monitor/jobs` vẫn giữ pipeline Earth Engine NBR cũ và
+cần cài thêm `requirements-ee.txt` cùng cấu hình asset/credentials.
+
+## Chạy local
 
 ```bash
+cd backend
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt
 cp .env.example .env
 uvicorn app:app --host 0.0.0.0 --port 8080
 ```
 
-API trả job bất đồng bộ vì composite/vector hóa có thể lâu. Bản mẫu lưu job trong RAM; production cần queue + Redis/Postgres, idempotency key và Cloud Storage cho COG/GeoJSON lớn.
+Frontend cần trỏ tới API thật:
 
-## Kiểm tra clip
+```html
+<script>
+  window.GIAM_SAT_CONFIG = {
+    apiBase: "https://api.example.vn",
+    clipPath: "/api/v1/clip/jobs",
+    demoMode: false
+  };
+</script>
+```
 
-Job chỉ báo hoàn tất sau khi:
+## Kiểm tra đầu ra
 
-1. `admin_code` khớp đúng một feature trong asset;
-2. composite và change mask đã gọi `.clip(AOI)`;
-3. `reduceToVectors` nhận `geometry=AOI`;
-4. thumbnail/GeoTIFF nhận `region=AOI`;
-5. response có `clip_verified: true` và `admin_code` tương ứng.
+Job chỉ đặt `clip_verified=true` sau khi:
 
-`EPSG:4326` chỉ dùng cho GeoJSON/web display. Hectare tính theo `EPSG:6933`, không tính trực tiếp từ độ kinh/vĩ.
+1. Shapefile có CRS và hình học Polygon hợp lệ;
+2. các band được đọc trên cùng lưới pixel;
+3. `rasterio.mask.mask` dùng chính AOI đã dissolve;
+4. pixel hợp lệ ngoài AOI bằng 0;
+5. GeoTIFF có `nodata=-9999` và dataset mask, PNG có alpha bằng 0 ngoài AOI.
+
+GeoTIFF vẫn có khung pixel chữ nhật theo quy luật raster; phần ngoài polygon
+là NoData/mask, không phải hình ảnh chữ nhật còn dữ liệu ngoài ranh giới.
+
+## Triển khai
+
+Docker mặc định chạy route STAC mở, không cần API key Earth Engine. Dữ liệu
+đầu ra đang lưu trên local disk và job store trong RAM để dễ chạy thử. Khi
+triển khai nhiều instance, thay bằng Redis/PostgreSQL + hàng đợi và Cloud
+Storage/S3 cho COG; đặt TTL để xóa file ranh giới và ảnh tạm.
+
+Không ghi service-account JSON, token STAC, API key hay dữ liệu Shapefile của
+người dùng vào log hoặc repository. Giới hạn upload, CORS theo đúng domain
+GitHub Pages và bật HTTPS.
