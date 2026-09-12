@@ -8,26 +8,28 @@ WebGIS static-first cho GitHub Pages, dùng [Vietflexmap/VN](https://github.com/
 - Không còn danh sách quận/huyện và mã 63 tỉnh cũ trong luồng mặc định.
 - Click polygon PMTiles hoặc dùng bộ chọn để xác định AOI; giao diện chỉ gửi mã ĐVHC, không tin geometry do trình duyệt tự vẽ.
 - Vietflex làm map core; có Google Maps roadmap, satellite, hybrid, terrain và liên kết mở đúng vị trí trên Google Earth.
-- Nút **Tải ảnh đã clip** chỉ mở URL ảnh/GeoTIFF do backend trả về. Chế độ demo được gắn rõ `clip_verified: false`.
-- Có backend FastAPI tham chiếu trong `backend/app.py`; backend resolve mã AOI từ Earth Engine asset rồi dùng cùng geometry cho ảnh, vector và vùng download.
+- Nút **Tải ảnh đã clip** dùng route upload Shapefile/GeoJSON, lấy ảnh COG mở qua STAC và clip server-side bằng Rasterio.
+- Có backend FastAPI mở trong `backend/app.py` + `backend/clip_pipeline.py`; Earth Engine chỉ là route giám sát tùy chọn.
 
 ## Kiến trúc
 
 ```mermaid
 flowchart LR
-  A[GitHub Pages · Vietflex UI] --> B[Mã ĐVHC AOI]
-  B --> C[FastAPI job API]
-  C --> D[Earth Engine · Sentinel-2/Landsat]
-  D --> E[Clip AOI · GeoJSON · PNG/GeoTIFF]
+  A[GitHub Pages · Vietflex UI] --> B[ZIP Shapefile / GeoJSON]
+  B --> C[FastAPI · validate CRS + geometry]
+  C --> D[STAC · Sentinel-2/Landsat COG]
+  D --> E[Rasterio mask AOI · COG/PNG]
   E --> A
 ```
 
-Ranh giới hiển thị phía trình duyệt lấy từ PMTiles đã pin để tải nhanh. Khi phân tích thật, backend không nhận polygon tùy ý từ client: nó lookup `admin_code` trong `EE_ADMIN_ASSET`, kiểm tra đúng một feature, sau đó thực hiện:
+Ranh giới hiển thị phía trình duyệt lấy từ PMTiles đã pin để tải nhanh. Khi
+cắt ảnh, backend đọc chính file ranh giới người dùng gửi, bắt buộc CRS, sửa
+hình học, dissolve và dùng cùng AOI cho mọi band:
 
 ```text
-image.clip(AOI)
-reduceToVectors(geometry=AOI)
-download/getThumbURL(region=AOI)
+read Shapefile → make_valid → dissolve
+rasterio.mask.mask(AOI, crop=True)
+GeoTIFF mask/NoData + PNG alpha=0 ngoài AOI
 ```
 
 Diện tích `area_ha` được tính bằng `EPSG:6933` (equal-area), còn GeoJSON trả về dùng tọa độ WGS84 để hiển thị trên bản đồ web.
@@ -46,6 +48,7 @@ Mở `http://localhost:8080`. Giao diện tải `admin.json` theo commit cố đ
 <script>
   window.GIAM_SAT_CONFIG = {
     apiBase: "https://api.example.vn",
+    clipPath: "/api/v1/clip/jobs",
     monitorPath: "/api/v1/monitor/jobs",
     demoMode: false,
     useLegacyGoogleTiles: true
@@ -55,7 +58,25 @@ Mở `http://localhost:8080`. Giao diện tải `admin.json` theo commit cố đ
 
 `useLegacyGoogleTiles: true` bám đúng adapter tương thích trong Vietflex và không cần khóa, nhưng URL Google legacy không phải Map Tiles API công khai được Google cam kết ổn định. Production nên cấp `googleApiKey` runtime cho Map Tiles API chính thức, giới hạn theo HTTP referrer/API và tuân thủ attribution. Không commit khóa vào repository.
 
-## Hợp đồng API
+## Hợp đồng API cắt ảnh
+
+Giao diện gửi `multipart/form-data` tới `POST /api/v1/clip/jobs`:
+
+```text
+boundary_file = ranh_gioi.zip       # .shp + .shx + .dbf + .prj
+satellite     = s2                   # s2 | landsat9
+start_date    = 12/06/2026
+end_date      = 12/09/2026
+cloud_max     = 80
+output        = geotiff,png,geojson
+render_mode   = true_color
+```
+
+API trả `202` và `job_id`; client poll trạng thái rồi nhận URL `clip.tif`,
+`clip.png` và `aoi.geojson`. Chỉ khi kiểm tra không còn pixel hợp lệ ngoài AOI
+mới trả `clip_verified: true`.
+
+## Hợp đồng API giám sát biến động tùy chọn
 
 Giao diện gửi `POST /api/v1/monitor/jobs`:
 
@@ -92,9 +113,11 @@ API trả `202` và `job_id`. Client poll `GET /api/v1/monitor/jobs/{job_id}` r�
 
 Client từ chối kết quả có `admin_code` khác AOI đang chọn; kết quả không có `clip_verified` chỉ được hiển thị như chưa xác nhận clip.
 
-## Chạy backend tham chiếu
+## Chạy backend
 
-Backend cần một Earth Engine FeatureCollection chứa cùng mã địa giới với `sapnhap/admin.json`. Mã phải là chuỗi và duy nhất.
+Route cắt ảnh mở không cần API key Earth Engine. Cài `requirements.txt`, sau đó
+chạy FastAPI; mặc định backend dùng Microsoft Planetary Computer STAC và ký
+URL asset tự động.
 
 ```bash
 cd backend
@@ -105,12 +128,17 @@ cp .env.example .env
 uvicorn app:app --host 0.0.0.0 --port 8080
 ```
 
-Trong deployment, dùng Application Default Credentials hoặc Workload Identity. Không đưa service-account JSON, private key, Earth Engine asset bí mật hay API key vào frontend. Job store trong ví dụ là in-memory; production nhiều instance cần Redis/Postgres + hàng đợi và Cloud Storage/COG cho AOI lớn.
+Route `/api/v1/monitor/jobs` cũ cần cài thêm `requirements-ee.txt`, cấu hình
+Earth Engine project/asset và Application Default Credentials. Không đưa
+service-account JSON, private key, token STAC hay API key vào frontend. Job
+store và output hiện ở RAM/local disk để chạy thử; production nhiều instance
+cần Redis/Postgres + hàng đợi và Cloud Storage/S3 cho COG.
 
 Pipeline tham chiếu:
 
 - Sentinel‑2: `COPERNICUS/S2_SR_HARMONIZED`, mask SCL lớp mây/bóng mây, reflectance scale `0.0001`.
 - Landsat 9: `LANDSAT/LC09/C02/T1_L2`, mask `QA_PIXEL`, scale `0.0000275` và offset `-0.2`.
+- Clip ảnh mở: Planetary Computer STAC `sentinel-2-l2a` và `landsat-c2-l2`, đọc COG theo HTTP range.
 - Composite median theo hai khoảng không chồng lấn; chỉ số NBR; ngưỡng thay đổi ban đầu `0.15`.
 - Lọc diện tích tối thiểu/tối đa ở server sau vector hóa; ghi metadata về collection, thời gian, scale, mask, CRS và số cảnh.
 
