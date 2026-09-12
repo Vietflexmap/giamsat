@@ -1,7 +1,7 @@
 # Backend cắt ảnh theo ranh giới
 
 Backend ưu tiên mã nguồn mở cho WebGIS Vietflex: nhận ZIP Shapefile hoặc
-GeoJSON, kiểm tra hình học/CRS, tìm cảnh ảnh mở qua STAC, rồi cắt server-side
+GeoJSON, kiểm tra hình học/CRS, tìm ảnh và DEM mở qua STAC, rồi cắt server-side
 bằng Rasterio. Earth Engine chỉ còn là phần tùy chọn cho route giám sát biến
 động cũ.
 
@@ -17,6 +17,23 @@ ZIP (.shp + .shx + .dbf + .prj)
   → masked GeoTIFF/COG + RGBA PNG + AOI GeoJSON
 ```
 
+## Luồng DEM/DSM
+
+```text
+admin_code hoặc ZIP Shapefile
+  → geometry chuẩn + make_valid + dissolve
+  → STAC search tile Copernicus DEM/NASADEM/ALOS
+  → mosaic COG → CRS phẳng UTM cục bộ
+  → geometry_mask(AOI, all_touched=false) → crop + kiểm tra ngoài AOI
+  → DEM COG + hillshade/slope + contour GeoPackage
+  → preview PNG + bản đồ xuất bản PNG/PDF
+```
+
+Các nguồn global được khai báo là **DSM/DSM-like**, không tự đổi thành DTM.
+`resolution_m` không được nhỏ hơn độ phân giải tile nguồn để tránh quảng bá
+nội suy thành độ phân giải thực. `output_crs=auto` chọn UTM cục bộ theo AOI
+để slope và khoảng cách contour có đơn vị mét.
+
 API chính:
 
 ```text
@@ -25,6 +42,17 @@ GET  /api/v1/clip/jobs/{job_id}
 GET  /api/v1/clip/jobs/{job_id}/results.geojson
 GET  /api/v1/files/{job_id}/clip.tif
 GET  /api/v1/files/{job_id}/clip.png
+```
+
+API DEM:
+
+```text
+POST /api/v1/elevation/jobs
+GET  /api/v1/elevation/jobs/{job_id}
+GET  /api/v1/elevation/jobs/{job_id}/results.geojson
+GET  /api/v1/files/{job_id}/dem.tif
+GET  /api/v1/files/{job_id}/preview.png
+GET  /api/v1/files/{job_id}/map.pdf
 ```
 
 Ví dụ trường multipart:
@@ -72,6 +100,25 @@ Mặc định dùng Microsoft Planetary Computer STAC:
 gian. Route `/api/v1/monitor/jobs` vẫn giữ pipeline Earth Engine NBR cũ và
 cần cài thêm `requirements-ee.txt` cùng cấu hình asset/credentials.
 
+### Cấu hình ranh giới theo mã
+
+`admin.json` và PMTiles của frontend chỉ phục vụ tra cứu/hiển thị. Để gọi
+DEM bằng dropdown tỉnh/xã, đặt một GeoPackage, GeoJSON hoặc Shapefile có đúng
+một Polygon/MultiPolygon cho mỗi mã:
+
+```text
+ADMIN_BOUNDARIES_PATH=./data/vn_admin_boundaries.gpkg
+ADMIN_CODE_FIELD=code
+DEM_STAC_API_URL=https://planetarycomputer.microsoft.com/api/stac/v1
+DEM_COP_COLLECTION=cop-dem-glo-30
+DEM_NASA_COLLECTION=nasadem
+DEM_ALOS_COLLECTION=alos-dem
+```
+
+Nếu chưa cấu hình dataset máy chủ, tải ZIP gồm `.shp`, `.shx`, `.dbf`, `.prj`
+trên giao diện. Backend từ chối ghép tên/centroid vì đó không phải geometry
+đủ chính xác để cắt ảnh.
+
 ## Chạy local
 
 ```bash
@@ -90,6 +137,7 @@ Frontend cần trỏ tới API thật:
   window.GIAM_SAT_CONFIG = {
     apiBase: "https://api.example.vn",
     clipPath: "/api/v1/clip/jobs",
+    elevationPath: "/api/v1/elevation/jobs",
     demoMode: false
   };
 </script>
@@ -108,12 +156,20 @@ Job chỉ đặt `clip_verified=true` sau khi:
 GeoTIFF vẫn có khung pixel chữ nhật theo quy luật raster; phần ngoài polygon
 là NoData/mask, không phải hình ảnh chữ nhật còn dữ liệu ngoài ranh giới.
 
+Với DEM, job còn kiểm tra tile cùng CRS, chuyển sang CRS phẳng theo mét,
+không dùng `all_touched=true`, ghi `outside_valid_pixel_count=0` và xuất
+metadata về nguồn, vertical datum, độ phân giải nguồn/thực tế, NoData và số
+pixel hợp lệ. Bản đồ PNG/PDF có viền AOI hai lớp (halo trắng + nét tối) để
+không bị lem trên nền hillshade; đây chỉ là bố cục bản đồ, không thay đổi dữ
+liệu raster.
+
 ## Triển khai
 
 Docker mặc định chạy route STAC mở, không cần API key Earth Engine. Dữ liệu
 đầu ra đang lưu trên local disk và job store trong RAM để dễ chạy thử. Khi
 triển khai nhiều instance, thay bằng Redis/PostgreSQL + hàng đợi và Cloud
-Storage/S3 cho COG; đặt TTL để xóa file ranh giới và ảnh tạm.
+Storage/S3 cho COG; đặt TTL để xóa file ranh giới và ảnh tạm. Cần đặt
+`MPLBACKEND=Agg` trong môi trường headless để xuất PNG/PDF ổn định.
 
 Không ghi service-account JSON, token STAC, API key hay dữ liệu Shapefile của
 người dùng vào log hoặc repository. Giới hạn upload, CORS theo đúng domain
