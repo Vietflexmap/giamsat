@@ -100,7 +100,16 @@
 
             <fieldset>
               <legend><span class="legend-number">02</span> Nguồn dữ liệu</legend>
-              <div class="two-col">
+              <label class="field-label" for="product-mode">Loại sản phẩm</label>
+              <div class="select-wrap">
+                <select id="product-mode" name="product_mode">
+                  <option value="monitor" selected>Ảnh vệ tinh · giám sát biến động</option>
+                  <option value="dem">DEM địa hình · cắt theo ranh giới</option>
+                </select>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+              </div>
+              <p class="field-hint product-hint" id="product-hint">So sánh Sentinel‑2/Landsat 9 giữa hai khoảng thời gian.</p>
+              <div class="two-col" id="monitor-source-options">
                 <div>
                   <label class="field-label" for="satellite">Vệ tinh</label>
                   <div class="select-wrap">
@@ -111,7 +120,7 @@
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
                   </div>
                 </div>
-                <div>
+                <div id="monitor-type-field">
                   <label class="field-label" for="monitor_type">Loại giám sát</label>
                   <div class="select-wrap">
                     <select id="monitor_type" name="monitor_type" required>
@@ -122,9 +131,44 @@
                   </div>
                 </div>
               </div>
+              <div class="dem-options" id="dem-options" hidden>
+                <div class="two-col">
+                  <div>
+                    <label class="field-label" for="dem-source">Nguồn DEM mở</label>
+                    <div class="select-wrap">
+                      <select id="dem-source" name="dem_source">
+                        <option value="cop-dem-glo30" selected>Copernicus DEM GLO-30</option>
+                        <option value="nasadem">NASADEM</option>
+                        <option value="alos-aw3d30">ALOS World 3D 30 m</option>
+                      </select>
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+                    </div>
+                  </div>
+                  <div>
+                    <label class="field-label" for="dem-surface">Bề mặt cao độ</label>
+                    <div class="select-wrap">
+                      <select id="dem-surface" name="dem_surface">
+                        <option value="dsm" selected>DSM · bề mặt có cây/công trình</option>
+                      </select>
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+                    </div>
+                  </div>
+                </div>
+                <label class="field-label" for="contour-interval">Khoảng cao độ đường đồng mức</label>
+                <div class="unit-input-wrap"><input id="contour-interval" name="contour_interval_m" type="number" min="0.5" max="5000" step="0.5" value="10"><span>m</span></div>
+                <div class="dem-product-list" aria-label="Sản phẩm DEM xuất ra">
+                  <label><input type="checkbox" name="dem-product" value="dem" checked><span>DEM COG</span></label>
+                  <label><input type="checkbox" name="dem-product" value="hillshade" checked><span>Hillshade</span></label>
+                  <label><input type="checkbox" name="dem-product" value="slope" checked><span>Độ dốc</span></label>
+                  <label><input type="checkbox" name="dem-product" value="contours" checked><span>Contour</span></label>
+                  <label><input type="checkbox" name="dem-product" value="map" checked><span>Bản đồ PNG/PDF</span></label>
+                  <label><input type="checkbox" name="dem-product" value="preview" checked><span>Lớp xem nhanh</span></label>
+                </div>
+                <p class="dem-warning">Nguồn 30 m là DSM/DSM-like; không nội suy thành DEM 10 m và không thay thế DTM đo đạc cho thủy văn kỹ thuật.</p>
+              </div>
             </fieldset>
 
-            <fieldset>
+            <fieldset id="time-fieldset">
               <legend><span class="legend-number">03</span> Khoảng thời gian</legend>
               <p class="field-hint">Hai khoảng thời gian phải liên tiếp và không chồng lấn.</p>
               <div class="period-block">
@@ -170,7 +214,7 @@
               </div>
             </fieldset>
 
-            <fieldset>
+            <fieldset id="area-fieldset">
               <legend><span class="legend-number">04</span> Ngưỡng diện tích</legend>
               <p class="field-hint">Lọc các vùng biến động theo diện tích, đơn vị ha.</p>
               <div class="two-col">
@@ -231,6 +275,7 @@
         <div class="layer-popover" id="layer-popover" hidden>
           <div class="popover-title">Lớp hiển thị</div>
           <label class="toggle-row"><input type="checkbox" id="layer-results" checked><span class="toggle-ui"></span><span>Vùng biến động</span></label>
+          <label class="toggle-row"><input type="checkbox" id="layer-raster" checked><span class="toggle-ui"></span><span>Ảnh / DEM kết quả</span></label>
           <label class="toggle-row"><input type="checkbox" id="layer-boundary" checked><span class="toggle-ui"></span><span>Ranh giới khu vực</span></label>
           <label class="toggle-row"><input type="checkbox" id="layer-grid"><span class="toggle-ui"></span><span>Lưới tọa độ</span></label>
         </div>
@@ -246,10 +291,18 @@
         </div>
 
         <div class="map-legend">
-          <div class="legend-title">CHÚ GIẢI BIẾN ĐỘNG</div>
-          <div class="legend-item"><span class="legend-swatch decrease"></span><span>Giảm / mất phủ xanh</span></div>
-          <div class="legend-item"><span class="legend-swatch increase"></span><span>Tăng / phục hồi phủ xanh</span></div>
-          <div class="legend-item"><span class="legend-swatch boundary"></span><span>Ranh giới phân tích</span></div>
+          <div id="legend-monitor">
+            <div class="legend-title">CHÚ GIẢI BIẾN ĐỘNG</div>
+            <div class="legend-item"><span class="legend-swatch decrease"></span><span>Giảm / mất phủ xanh</span></div>
+            <div class="legend-item"><span class="legend-swatch increase"></span><span>Tăng / phục hồi phủ xanh</span></div>
+            <div class="legend-item"><span class="legend-swatch boundary"></span><span>Ranh giới phân tích</span></div>
+          </div>
+          <div id="legend-dem" hidden>
+            <div class="legend-title">CHÚ GIẢI ĐỊA HÌNH</div>
+            <div class="legend-gradient"></div>
+            <div class="legend-item"><span class="legend-swatch elevation-boundary"></span><span>Ranh giới AOI rõ nét</span></div>
+            <div class="legend-item"><span>DSM · mét cao độ</span></div>
+          </div>
         </div>
 
         <div class="map-attribution" id="map-attribution">Vietflex Map <span>•</span> Google Maps <span>•</span> Ranh giới Vietflexmap/anhmap</div>
@@ -261,7 +314,7 @@
               <h2 id="results-title">Chưa có kết quả</h2>
             </div>
             <div class="results-head-actions">
-              <button class="text-button" id="download-image" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM7 15l3-3 2 2 2-2 3 3M8 9h.01"/></svg> Ảnh đã clip</button>
+              <button class="text-button" id="download-image" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM7 15l3-3 2 2 2-2 3 3M8 9h.01"/></svg> Ảnh / DEM đã clip</button>
               <button class="text-button" id="download-csv" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 19h14"/></svg> CSV</button>
               <button class="icon-button" id="close-results" type="button" aria-label="Đóng kết quả"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
             </div>
@@ -274,7 +327,7 @@
           </div>
           <div class="results-list-head"><span>Danh sách vùng biến động</span><span id="results-count-label">0 vùng</span></div>
           <div class="results-list" id="results-list"></div>
-          <div class="results-disclaimer" id="results-disclaimer"><span class="status-dot amber"></span> Chế độ minh họa phía trình duyệt. Kết nối API để nhận ảnh và vector Sentinel‑2/Landsat đã clip theo AOI.</div>
+          <div class="results-disclaimer" id="results-disclaimer"><span class="status-dot amber"></span> Chế độ minh họa phía trình duyệt. Kết nối API để nhận ảnh, DEM và vector đã clip theo AOI.</div>
         </section>
 
         <div class="map-loading" id="map-loading" hidden>
